@@ -121,7 +121,9 @@ class Bench:
 
             scratch = self.home / "emulator"
             scratch.mkdir(parents=True, exist_ok=True)
-            launch = sandbox.command([FUSE, *FUSE_ARGS], read=[self.programs, Path(ROM).parent], write=[scratch],
+            # Line-buffered, so what its debugger prints (debug runs) reaches the file while it is still running.
+            fuse = ["stdbuf", "-oL", FUSE] if shutil.which("stdbuf") else [FUSE]
+            launch = sandbox.command([*fuse, *FUSE_ARGS], read=[self.programs, Path(ROM).parent], write=[scratch],
                                      network=False, env={"HOME": str(scratch)})
             self._emu = X11Emulator(LaunchConfig(launch[0], launch[1:]), rom_path=ROM, load=load, sound=True,
                                     scratch=str(scratch), extra_args=extra or (), stdout=stdout)
