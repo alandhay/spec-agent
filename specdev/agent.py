@@ -11,6 +11,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import os
+import shlex
+import shutil
 import threading
 import time
 import warnings
@@ -38,7 +40,9 @@ from claude_agent_sdk import (
 
 from specbot.errors import SpecbotError
 
+from . import sandbox
 from .bench import Bench, BenchError
+from .memory import Memory
 
 PROMPT = (Path(__file__).resolve().parent / "prompt.md").read_text(encoding="utf-8")
 SERVER = "spectrum"
@@ -56,7 +60,7 @@ def _schema(required: list[str], **properties: dict) -> dict:
     return {"type": "object", "properties": properties, "required": required}
 
 
-def make_tools(bench: Bench) -> list:
+def make_tools(bench: Bench, memory: Memory | None = None) -> list:
     async def call(fn, *args) -> dict[str, Any]:
         try:
             result = await asyncio.to_thread(fn, *args)
@@ -112,7 +116,31 @@ def make_tools(bench: Bench) -> list:
     async def assemble(args):
         return await call(bench.assemble, args["file"])
 
-    return [run_program, read_screen, screenshot, press_keys, type_text, assemble]
+    tools = [run_program, read_screen, screenshot, press_keys, type_text, assemble]
+    if memory is None:
+        return tools
+
+    @tool("remember",
+          "Keep a short note about this person for future conversations (all their projects): a preference, a goal, "
+          "or a lesson worth not learning twice. One fact per note, under 300 characters.",
+          _schema(["note"], note={"type": "string"}))
+    async def remember(args):
+        return await call(memory.add, args["note"])
+
+    @tool("forget", "Remove one of your notes about this person, by its number in the list in your instructions.",
+          _schema(["number"], number={"type": "integer"}))
+    async def forget(args):
+        return await call(memory.forget, int(args["number"]))
+
+    return [*tools, remember, forget]
+
+
+def claude_cli() -> str:
+    """The Claude Code the SDK would run: the copy bundled with it, else the one on the PATH."""
+    import claude_agent_sdk
+
+    bundled = Path(claude_agent_sdk.__file__).resolve().parent / "_bundled" / "claude"
+    return str(bundled) if bundled.is_file() else shutil.which("claude") or "claude"
 
 
 OUTSIDE = "Only files inside the programs folder can be used."
@@ -164,8 +192,10 @@ class Session:
     def __init__(self, bench: Bench, *, gate: Callable[[], str | None] | None = None,
                  on_done: Callable[[dict], None] | None = None,
                  on_event: Callable[[dict], None] | None = None,
-                 events: list[dict] | None = None, resume: str | None = None) -> None:
+                 events: list[dict] | None = None, resume: str | None = None,
+                 memory: Memory | None = None) -> None:
         self.bench = bench
+        self.memory = memory
         self._on_event = on_event           # given every event as it happens, to keep the conversation
         self._gate = gate                   # says why a new request may not start, or None
         self._on_done = on_done             # given a record of each finished request (what, tools, cost)
@@ -179,6 +209,8 @@ class Session:
         self.running = False
         self.started: float | None = None
         self._lock = threading.Lock()
+        self._changed = threading.Condition(self._lock)
+        self.version = 0                    # goes up whenever what snapshot() returns may have changed
         self._client: ClaudeSDKClient | None = None
         self._loop = asyncio.new_event_loop()
         self._queue: asyncio.Queue = asyncio.Queue()
@@ -186,10 +218,29 @@ class Session:
 
     # -- called from request threads ----------------------------------------
 
+    def _bump(self) -> None:
+        """Called with the lock held: wake whoever is waiting in wait_change()."""
+        self.version += 1
+        self._changed.notify_all()
+
+    def _set_running(self, running: bool) -> None:
+        with self._lock:
+            self.running = running
+            if running:
+                self.started = time.time()
+            self._bump()
+
+    def wait_change(self, seen: int, timeout: float) -> int:
+        """Wait until the version differs from ``seen`` (or ``timeout`` seconds pass); return the version."""
+        with self._changed:
+            self._changed.wait_for(lambda: self.version != seen, timeout)
+            return self.version
+
     def emit(self, kind: str, **data: Any) -> None:
         with self._lock:
             event = {"n": len(self.events), "kind": kind, "at": time.time(), **data}
             self.events.append(event)
+            self._bump()
         if self._on_event:
             self._on_event(event)
 
@@ -198,7 +249,7 @@ class Session:
             start = after if generation == self.generation else 0
             live = [{**block, "text": block["text"][-LIVE_TAIL:]} for _, block in sorted(self._live.items())]
             return {"generation": self.generation, "events": self.events[start:], "running": self.running,
-                    "started": self.started, "busy": self.bench.busy, "live": live}
+                    "started": self.started, "busy": self.bench.busy, "live": live, "version": self.version}
 
     def send(self, text: str, *, shown: str | None = None, **extra: Any) -> None:
         """Ask the agent for something. ``shown`` is what the page shows when it differs from what the agent is told."""
@@ -207,7 +258,7 @@ class Session:
         refusal = self._gate() if self._gate else None
         if refusal:
             return self.emit("error", text=refusal)
-        self.running, self.started = True, time.time()
+        self._set_running(True)
         self._loop.call_soon_threadsafe(self._queue.put_nowait, (text, shown))
 
     def stop(self) -> None:
@@ -230,11 +281,30 @@ class Session:
         asyncio.set_event_loop(self._loop)
         self._loop.run_until_complete(self._main())
 
+    def _launcher(self) -> str:
+        """A script that starts Claude Code confined to this person's agent folder and current project.
+
+        It lives in the person's folder, where the confined process cannot change it, and
+        gives the process a home of its own, so no one's agent can read another's records.
+        """
+        home = self.bench.home
+        agent_home = home / "agent"
+        (agent_home / "tmp").mkdir(parents=True, exist_ok=True)
+        cmd = sandbox.command([claude_cli()], write=[agent_home, self.bench.programs],
+                              env={"HOME": str(agent_home), "TMPDIR": str(agent_home / "tmp")})
+        script = home / "agent.sh"
+        script.write_text(f'#!/bin/sh\nexec {shlex.join(cmd)} "$@"\n')
+        script.chmod(0o755)
+        return str(script)
+
     def _options(self) -> ClaudeAgentOptions:
-        server = create_sdk_mcp_server(SERVER, tools=make_tools(self.bench))
+        server = create_sdk_mcp_server(SERVER, tools=make_tools(self.bench, self.memory))
         guard, hook = make_guard(self.bench.programs)
+        notes = (self.memory.prompt() if self.memory else
+                 "\n\n(There is no memory in this conversation: the remember and forget tools are not available.)")
         return ClaudeAgentOptions(
-            system_prompt=PROMPT,
+            system_prompt=PROMPT + notes,
+            cli_path=self._launcher() if sandbox.enabled() else None,
             model=os.environ.get("SPECDEV_MODEL") or None,
             cwd=str(self.bench.programs),
             tools=FILE_TOOLS,
@@ -268,9 +338,10 @@ class Session:
                 with self._lock:
                     self.events, self._resume = list(item[1]), item[2]
                     self.generation += 1
+                    self._bump()
                 continue
             text, self._request = item
-            self.running, self.started = True, time.time()
+            self._set_running(True)
             self._tools, self._answered = [], False
             try:
                 for attempt in (1, 2):
@@ -296,8 +367,10 @@ class Session:
                     await self._drop_client()
                     self._resume = None
             finally:
-                self.running = False
-                self._live = {}
+                with self._lock:
+                    self.running = False
+                    self._live = {}
+                    self._bump()
 
     def _show_partial(self, event: dict) -> None:
         """Keep ``_live`` in step with the reply as it is written, so the page can show it growing."""
@@ -314,6 +387,9 @@ class Session:
             elif kind == "content_block_delta" and index in self._live:
                 delta = event.get("delta") or {}
                 self._live[index]["text"] += delta.get("text") or delta.get("thinking") or delta.get("partial_json") or ""
+            else:
+                return
+            self._bump()
 
     def _finished(self, kind: str) -> None:
         """A block has arrived whole: its part-written version is no longer needed."""
@@ -321,6 +397,7 @@ class Session:
             for index in sorted(self._live):
                 if self._live[index]["kind"] == kind:
                     del self._live[index]
+                    self._bump()
                     return
 
     def _show(self, message: Any) -> None:

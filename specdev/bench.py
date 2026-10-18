@@ -25,6 +25,8 @@ from specbot.emulator import Emulator, emulator_from_config
 from specbot.errors import SpecbotError
 from specbot.tape import basic_to_tap
 
+from . import sandbox
+
 ROOT = Path(__file__).resolve().parent.parent
 PROGRAMS = ROOT / "programs"
 CONFIG = ROOT / "specbot.toml"
@@ -49,8 +51,11 @@ class BenchError(Exception):
 
 
 class Bench:
-    def __init__(self, programs: Path = PROGRAMS) -> None:
+    def __init__(self, programs: Path = PROGRAMS, home: Path | None = None) -> None:
         self.programs = programs            # this workbench's folder: nothing outside it is touched
+        # The person's folder. With the sandbox on (hosted) the emulator and assembler can use only
+        # the programs folder and, for the emulator, a scratch folder of its own in here.
+        self.home = home or programs.parent
         self._lock = threading.RLock()
         self._emu: Emulator | None = None
         self._last_png: bytes | None = None
@@ -110,7 +115,12 @@ class Bench:
                 self._emu = None
             from specbot.x11_backend import X11Emulator
 
-            self._emu = X11Emulator(LaunchConfig(FUSE, FUSE_ARGS), rom_path=ROM, load=load, sound=True)
+            scratch = self.home / "emulator"
+            scratch.mkdir(parents=True, exist_ok=True)
+            launch = sandbox.command([FUSE, *FUSE_ARGS], read=[self.programs, Path(ROM).parent], write=[scratch],
+                                     network=False, env={"HOME": str(scratch)})
+            self._emu = X11Emulator(LaunchConfig(launch[0], launch[1:]), rom_path=ROM, load=load, sound=True,
+                                    scratch=str(scratch))
             return self._emu
         if self._emu is not None:
             self._emu.close()
@@ -214,11 +224,11 @@ class Bench:
             raise BenchError(f"programs/{file} does not exist")
         out = source.with_suffix(".bin")
         out.unlink(missing_ok=True)
-        result = subprocess.run(
-            [str(SJASMPLUS), "--nologo", "--msg=war", f"--raw={out}", f"--sym={source.with_suffix('.sym')}",
-             f"--lst={source.with_suffix('.lst')}", f"-I{source.parent}", source.as_posix()],
-            capture_output=True, text=True, cwd=source.parent, timeout=60,
-        )
+        cmd = [str(SJASMPLUS), "--nologo", "--msg=war", f"--raw={out}", f"--sym={source.with_suffix('.sym')}",
+               f"--lst={source.with_suffix('.lst')}", f"-I{source.parent}", source.as_posix()]
+        # Confined, INCBIN and INCLUDE can reach nothing outside the programs folder.
+        result = subprocess.run(sandbox.command(cmd, write=[self.programs], network=False),
+                                capture_output=True, text=True, cwd=source.parent, timeout=60)
         messages = (result.stdout + result.stderr).strip()
         if result.returncode or not out.is_file():
             raise BenchError(f"assembly failed:\n{messages or 'sjasmplus gave no message'}")

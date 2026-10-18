@@ -146,6 +146,7 @@ def main() -> int:
         f"SPECDEV_BUCKET={out['Bucket']}",
         "SPECDEV_DATA=/var/lib/specdev/data",
         "SPECDEV_ACTIVITY=/var/lib/specdev/last-active",
+        "SPECDEV_SANDBOX=1",
         f"SPECDEV_STOP_MINUTES={STOP_MINUTES}",
         f"SPECDEV_STARTING_BUDGET={STARTING_BUDGET}",
         "CLAUDE_CODE_USE_BEDROCK=1",

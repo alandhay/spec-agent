@@ -8,8 +8,9 @@ must then carry a sign-in token, and each person gets a workbench of their own -
 their projects, an emulator and a conversation.
 
 Projects, the library, hand-written programs and uploads are described in
-PROJECTS.md. The page polls for the agent's events; the emulator's screen and
-sound are long responses that the page reads as they arrive.
+PROJECTS.md. What the page shows of the agent (its messages, status, budget and
+files) arrives on one long response as it changes, as do the emulator's screen and
+sound; each is a series of length-prefixed frames.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from pathlib import Path
 from . import bench as workbench
 from . import mcp
 from .agent import Session
+from .memory import Memory
 from .projects import SOURCE_TYPES, UNNAMED, Library
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -88,10 +90,11 @@ class Workspace:
         self.home = DATA / (user if POOL else "local")
         self.home.mkdir(parents=True, exist_ok=True)
         self.library = Library(self.home, BUCKET, f"library/{user}")
+        self.memory = Memory(self.home / "memory.json")
         project = self.library.current
-        self.bench = workbench.Bench(project.programs)
+        self.bench = workbench.Bench(project.programs, home=self.home)
         self.session = Session(self.bench, gate=self._gate, on_done=self._record, on_event=self._keep,
-                               events=project.events(), resume=project.meta["session"])
+                               events=project.events(), resume=project.meta["session"], memory=self.memory)
         self.edited: set[str] = set()       # files changed by hand since the agent last worked
         self.active = time.time()
         self.asleep = False
@@ -271,6 +274,33 @@ class Workspace:
         except (OSError, ValueError, KeyError, IndexError, AttributeError):
             pass
         return out
+
+
+def event_frames(ws: Workspace, generation: int, after: int, idle_s: float = 1.0, settle_s: float = 0.1):
+    """What the page shows of the workbench, as it changes: JSON frames for Handler._stream.
+
+    The first frame is everything since ``after``; each later one carries the new
+    events and the whole of the small state (status, the reply being written, budget,
+    project, files). Nothing is sent while nothing changes. Files and the budget are
+    looked at every ``idle_s`` even when the conversation is quiet; ``settle_s`` lets a
+    burst of changes (a reply being written) go out together.
+    """
+    shown, version = None, -1
+    while True:
+        version = ws.session.wait_change(version, idle_s)
+        snap = ws.session.snapshot(generation, after)
+        state = {key: snap[key] for key in ("generation", "running", "started", "busy", "live")}
+        state.update(budget=ws.budget(), project=ws.info(), files=ws.files())
+        events = snap["events"]
+        if events or state != shown:
+            if snap["generation"] != generation:
+                after = 0
+            generation, shown = snap["generation"], state
+            after = events[-1]["n"] + 1 if events else after
+            yield json.dumps({**state, "events": events}).encode()
+        else:
+            yield None
+        time.sleep(settle_s)
 
 
 WORKSPACES: dict[str, Workspace] = {}
@@ -471,6 +501,10 @@ class Handler(BaseHTTPRequestHandler):
         if ws is None:
             return
         try:
+            if url.path == "/api/events.stream":
+                return self._stream(event_frames(ws, int(query.get("generation", 0)), int(query.get("after", 0))))
+            if url.path == "/api/memory":
+                return self._json(200, {"notes": ws.memory.notes()})
             if url.path == "/api/events":
                 snapshot = ws.session.snapshot(int(query.get("generation", 0)), int(query.get("after", 0)))
                 return self._json(200, {**snapshot, "budget": ws.budget(), "project": ws.info()})
@@ -547,6 +581,12 @@ class Handler(BaseHTTPRequestHandler):
                 if not text and not image:
                     raise Refused("Say what you want built.")
                 ws.say(text, image if isinstance(image, dict) else None, str(body.get("kind", "")))
+            elif path == "/api/memory/forget":
+                number = body.get("number")
+                if not isinstance(number, int) or not 1 <= number <= len(ws.memory.notes()):
+                    raise Refused("There is no such note.")
+                ws.memory.forget(number)
+                reply["notes"] = ws.memory.notes()
             elif path == "/api/stop":
                 ws.session.stop()
             elif path == "/api/project/new":

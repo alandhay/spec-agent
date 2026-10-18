@@ -35,7 +35,7 @@
   .budget .amounts { position: absolute; top: calc(100% + 8px); right: 0; z-index: 5; background: var(--panel-2);
     border: 1px solid var(--line); border-radius: 8px; padding: 8px; display: flex; gap: 6px; white-space: nowrap;
     box-shadow: 0 6px 20px #0008; }
-  .budget .amounts[hidden] { display: none; }
+  .budget[hidden], .budget .amounts[hidden] { display: none; }
 
   /* Three panes with two draggable dividers: chat | (Spectrum over Program). */
   main { padding: 16px; display: grid; min-height: 0;
@@ -140,6 +140,11 @@
   .card .what { padding: 8px 10px; display: grid; gap: 2px; }
   .card .what b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .card .what span { color: var(--dim); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .notes { padding: 8px 16px 16px; overflow-y: auto; }
+  .notes p { color: var(--dim); font-size: 13px; margin: 8px 0 12px; }
+  .note { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-top: 1px solid var(--line); font-size: 14px; }
+  .note span { flex: 1; }
+  .note small { color: var(--dim); font-size: 12px; white-space: nowrap; }
   .attached { border-top: 1px solid var(--line); padding: 8px 10px; display: flex; gap: 10px; align-items: center; font-size: 13px; }
   .attached[hidden] { display: none; }
   .attached img { height: 44px; border-radius: 4px; }
@@ -188,6 +193,7 @@
   <section class="panel chat">
     <h2><span>Agent <span id="projectName"></span></span>
       <span><button class="small" id="projects" title="Open one of your earlier projects">Projects</button>
+      <button class="small" id="memoryBtn" title="What the agent remembers about you between conversations">Memory</button>
       <button class="small" id="reset" title="Start a new project with an empty chat">New project</button></span></h2>
     <div id="log"></div>
     <div class="attached" id="attached" hidden>
@@ -240,6 +246,12 @@
     <div class="cards" id="cards"></div>
   </div>
 </div>
+<div class="overlay" id="memory" hidden>
+  <div class="sheet" style="width: min(640px, 100%)">
+    <h2>What the agent remembers <button class="small" id="closeMemory">Close</button></h2>
+    <div class="notes" id="notes"></div>
+  </div>
+</div>
 <script>
 const $ = id => document.getElementById(id);
 const log = $("log"), input = $("input");
@@ -277,6 +289,7 @@ const IDEAS = [
 ];
 let generation = 0, after = 0, running = false, tools = {}, started = null;
 let currentFile = null, pinned = false, fileStamp = {};
+let shownFiles = [], filesJson = "", filesDirty = true;  // the file list as last pushed; redraw it when set
 
 function el(tag, cls, text) {
   const node = document.createElement(tag);
@@ -320,6 +333,8 @@ function brief(name, inp) {
   if (inp.keys) return inp.keys.join(" ");
   if (inp.text !== undefined) return JSON.stringify(inp.text);
   if (inp.pattern) return inp.pattern;
+  if (inp.note) return JSON.stringify(inp.note);
+  if (inp.number) return "note " + inp.number;
   if (inp.wait_seconds) return "wait up to " + inp.wait_seconds + " s";
   return "";
 }
@@ -359,7 +374,7 @@ function addEvent(e) {
     log.append(d);
     tools[e.id] = d;
     const file = fileOf(e.name, e.input);
-    if (file && !pinned) { currentFile = file; fileStamp = {}; }
+    if (file && !pinned) { currentFile = file; fileStamp = {}; filesDirty = true; }
   } else if (e.kind === "result") {
     const d = tools[e.id];
     if (!d) return;
@@ -376,7 +391,7 @@ function addEvent(e) {
 }
 
 // What the agent is part-way through: its thinking and reply as they are written, and the
-// file or tool call it is composing. Redrawn on every poll and replaced by the finished item.
+// file or tool call it is composing. Redrawn on every update and replaced by the finished item.
 const liveBox = el("div", "live");
 function showLive(blocks) {
   liveBox.replaceChildren();
@@ -399,34 +414,51 @@ function showLive(blocks) {
   if (liveBox.childElementCount) log.append(liveBox); else liveBox.remove();
 }
 
-async function poll() {
-  try {
-    const r = await fetch(`/api/events?generation=${generation}&after=${after}`);
-    asleep = auth !== null && r.status >= 500;  // hosted, the machine stops itself when unused
-    const data = await r.json();
-    if (data.generation !== generation) {  // another project (or the first load): start the page again
-      generation = data.generation; after = 0; tools = {};
-      currentFile = null; pinned = false; fileStamp = {}; edit(false);
-      $("tv").hidden = true; $("tvOff").hidden = false;
-      showEmpty();
-    }
-    $("projectName").textContent = data.project ? "·  " + data.project.name : "";
-    const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
-    for (const e of data.events) { addEvent(e); after = e.n + 1; }
-    showLive(data.live || []);
-    if ((data.events.length || (data.live || []).length) && atBottom) log.scrollTop = log.scrollHeight;
-    running = data.running; started = data.started;
-    $("status").className = "status" + (running ? " working" : "");
-    $("statusText").textContent = running ? "Working  ·  " + Math.round(Date.now() / 1000 - started) + " s" : "Idle";
-    $("stop").hidden = !running;
-    $("send").textContent = running ? "Queue" : "Send";
-    $("busy").textContent = data.busy || "";
-    showBudget(data.budget);
-  } catch (err) {
+// Everything the page shows of the agent comes on one long response, a frame of JSON each time
+// something changes: new events, then the status, the reply being written, budget, project and files.
+function update(data) {
+  if (data.generation !== generation) {  // another project (or the first load): start the page again
+    generation = data.generation; after = 0; tools = {};
+    currentFile = null; pinned = false; fileStamp = {}; edit(false);
+    $("tv").hidden = true; $("tvOff").hidden = false;
+    showEmpty();
+  }
+  $("projectName").textContent = data.project ? "·  " + data.project.name : "";
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+  for (const e of data.events) { addEvent(e); after = e.n + 1; }
+  showLive(data.live || []);
+  if ((data.events.length || (data.live || []).length) && atBottom) log.scrollTop = log.scrollHeight;
+  running = data.running; started = data.started;
+  showStatus();
+  $("stop").hidden = !running;
+  $("send").textContent = running ? "Queue" : "Send";
+  $("busy").textContent = data.busy || "";
+  showBudget(data.budget);
+  const listed = JSON.stringify(data.files || []);
+  if (listed !== filesJson || filesDirty) { filesJson = listed; shownFiles = data.files || []; files(); }
+}
+
+function showStatus() {
+  $("status").className = "status" + (running ? " working" : "");
+  $("statusText").textContent = running ? "Working  ·  " + Math.round(Date.now() / 1000 - started) + " s" : "Idle";
+}
+setInterval(() => { if (running && connected) showStatus(); }, 1000);
+
+let connected = false;
+async function follow() {
+  for (;;) {
+    try {
+      const r = await fetch(`/api/events.stream?generation=${generation}&after=${after}`);
+      asleep = auth !== null && r.status >= 500;  // hosted, the machine stops itself when unused
+      if (!r.ok) throw new Error("no stream");
+      connected = true;
+      await readFrames(r, frame => update(JSON.parse(new TextDecoder().decode(frame))), () => true);
+    } catch (err) { /* said below */ }
+    connected = false;
     $("status").className = "status";
     $("statusText").textContent = asleep ? "Asleep. It starts again when you send a message." : "Server not reachable";
+    await pause(1500);
   }
-  setTimeout(poll, running ? 250 : 1200);
 }
 
 // Hosted, each person has a budget that requests are paid from; it is brought up to date as each one finishes.
@@ -520,6 +552,28 @@ $("projects").onclick = async () => {
   } catch (err) { tell(err); }
 };
 
+// Memory: the notes the agent keeps about this person; any can be removed.
+function showNotes(notes) {
+  const box = $("notes");
+  box.replaceChildren(el("p", "", notes.length
+    ? "The agent keeps these notes itself and sees them at the start of every conversation, in all your projects."
+    : "Nothing yet. The agent notes things worth knowing next time, such as your preferences, and they will show here."));
+  notes.forEach((note, i) => {
+    const row = el("div", "note");
+    const b = el("button", "small", "Forget");
+    b.onclick = () => post("/api/memory/forget", { number: i + 1 }).then(data => showNotes(data.notes), tell);
+    row.append(el("span", "", note.text),
+      el("small", "", new Date(note.at * 1000).toLocaleDateString([], { dateStyle: "medium" })), b);
+    box.append(row);
+  });
+}
+$("memoryBtn").onclick = async () => {
+  try { showNotes((await (await fetch("/api/memory")).json()).notes); $("memory").hidden = false; }
+  catch (err) { tell(err); }
+};
+$("closeMemory").onclick = () => { $("memory").hidden = true; };
+$("memory").onclick = ev => { if (ev.target === $("memory")) $("memory").hidden = true; };
+
 $("form").onsubmit = ev => { ev.preventDefault(); send(); };
 input.onkeydown = ev => { if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); send(); } };
 input.oninput = () => { input.style.height = ""; input.style.height = Math.min(input.scrollHeight + 2, 160) + "px"; };
@@ -527,9 +581,9 @@ $("stop").onclick = () => post("/api/stop").catch(tell);
 
 // The emulator's screen and sound each arrive as one long response made of frames: a 4-byte
 // length, then that many bytes (an empty frame now and then shows the connection is alive).
-// Reads frames until the response ends or wanted() says stop.
-async function readFrames(url, onFrame, wanted) {
-  const r = await fetch(url);
+// Reads frames until the response ends or wanted() says stop. Takes an address or a response.
+async function readFrames(source, onFrame, wanted) {
+  const r = typeof source === "string" ? await fetch(source) : source;
   if (!r.ok) throw new Error("no stream");
   const reader = r.body.getReader();
   let held = new Uint8Array(0);
@@ -562,7 +616,7 @@ async function screen() {
   for (;;) {
     try {
       if (!document.hidden && !asleep) await readFrames("/api/screen.stream", showFrame, () => !document.hidden);
-    } catch (err) { /* server gone; poll() says so */ }
+    } catch (err) { /* server gone; follow() says so */ }
     await pause(1500);
   }
 }
@@ -682,7 +736,7 @@ function edit(on, text) {
   editing = on;
   $("editor").hidden = !on; $("source").hidden = on; $("saveFile").hidden = !on;
   $("editFile").textContent = on ? "Cancel" : "Edit";
-  if (on) { $("editor").value = text; $("editor").focus(); } else fileStamp = {};
+  if (on) { $("editor").value = text; $("editor").focus(); } else { fileStamp = {}; filesDirty = true; files(); }
 }
 $("editFile").onclick = () => { if (editing) edit(false); else if (currentFile) edit(true, shownText); };
 $("newFile").onclick = () => { $("newName").hidden = false; $("newName").value = ""; $("newName").focus(); };
@@ -711,8 +765,9 @@ $("runFile").onclick = () => { if (currentFile) run(currentFile).catch(tell); };
 
 async function files() {
   try {
-    if (editing) throw new Error("leave the editor alone");
-    const list = await (await fetch("/api/files")).json();
+    if (editing) return;                 // leave the editor alone; drawn again when it closes
+    filesDirty = false;
+    const list = shownFiles;
     const sources = list.filter(f => f.source);
     if (!currentFile && sources.length) currentFile = sources[0].name;
     const tabs = $("tabs");
@@ -732,8 +787,7 @@ async function files() {
       fileStamp = { name: now.name, modified: now.modified };
       $("fileNote").textContent = text.split("\n").filter(l => l.trim()).length + " lines";
     } else if (!now) { $("source").textContent = currentFile ? "" : "No programs yet."; $("fileNote").textContent = ""; }
-  } catch (err) { /* try again next time */ }
-  setTimeout(files, running ? 1000 : 2500);
+  } catch (err) { filesDirty = true; /* try again with the next update */ }
 }
 
 // Hosted, every request needs a sign-in token. It is kept in a cookie so that images and
@@ -832,7 +886,7 @@ divider($("splitChat"), "chat", document.querySelector("main"), true);
 divider($("splitTv"), "tv", document.querySelector(".right"), false);
 
 async function start() {
-  try { auth = (await (await plainFetch("/api/config")).json()).auth; } catch (err) { /* poll() reports it */ }
+  try { auth = (await (await plainFetch("/api/config")).json()).auth; } catch (err) { /* follow() reports it */ }
   const code = new URLSearchParams(location.search).get("code");
   if (auth && code) {
     history.replaceState(null, "", "/");
@@ -843,7 +897,7 @@ async function start() {
   }
   if (auth) await awake();
   showEmpty();
-  poll(); screen(); files();
+  follow(); screen();
 }
 start();
 </script>

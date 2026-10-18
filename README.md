@@ -71,13 +71,18 @@ its own options.
 ## Status
 
 - **specbot, specart, tetris**: working, with tests.
-- **specdev**: works locally and hosted. The hosted page polls the server
-  rather than streaming updates. Users are kept apart by folder checks in the
-  server, not by separate machines, so invite only people you trust.
+- **specdev**: works locally and hosted. The page gets updates pushed from
+  the server as they happen. The agent keeps short notes about each person
+  across conversations and projects (shown under **Memory**). Hosted, each
+  person's agent, assembler and emulator are confined to their own folders
+  with Linux Landlock. They still share one machine, so invite only people
+  you trust.
 - **MCP server**: tools for listing, opening and creating projects and for
   building and checking programs work. An interactive widget (live screen with
   sound) is in progress.
-- No automated tests for `specdev` yet.
+- `specdev` has unit tests for memory, the events stream, the sandbox wrapper
+  and the file guard; the Landlock confinement itself can only be tested on
+  Linux (`python specdev/sandbox.py --check`, run by every deploy).
 
 ## Notes
 

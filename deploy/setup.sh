@@ -34,8 +34,14 @@ chmod -R u=rwX,go=rX /opt/specdev/app
 /opt/specdev/venv/bin/pip install -q --upgrade pip
 /opt/specdev/venv/bin/pip install -q -e "/opt/specdev/app[hosted]"
 
-chmod 640 /etc/specdev.env
-chgrp specdev /etc/specdev.env
+# systemd reads the settings as root and hands them to the service; nothing else needs the file,
+# and the confined processes, which may read /etc, must not see the keys in it.
+chown root:root /etc/specdev.env
+chmod 600 /etc/specdev.env
+
+# Each person's agent, assembler and emulator run confined to their own folder (specdev/sandbox.py).
+# The service refuses to start them without that, so check it works on this kernel.
+runuser -u specdev -- /opt/specdev/venv/bin/python -I /opt/specdev/app/specdev/sandbox.py --check
 
 cat >/etc/systemd/system/specdev.service <<'UNIT'
 [Unit]

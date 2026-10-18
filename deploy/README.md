@@ -43,8 +43,7 @@ Both `deploy.py` commands start the instance first if it is off. Settings live i
 ## Limits
 
 - One instance: about 6 requests are worked on at once (`SPECDEV_MAX_RUNNING`), and it is a single point of failure.
-- People are kept apart by folder checks in the server, not by separate machines; the assembler's `INCBIN` can still read any file the service user can. Invite people you trust.
-- The page still polls rather than streaming.
+- People are kept apart by folder checks in the server and, below those, by Landlock (`specdev/sandbox.py`, switched on by `SPECDEV_SANDBOX=1`): each person's agent, assembler and emulator can read the system's files but write, and read, only their own folders, so the assembler's `INCBIN` cannot reach another person's files or the service's settings. `setup.sh` checks the kernel supports this and stops the deploy if not; with it switched on, nothing is run unconfined. `/etc/specdev.env` is readable by root only. They still share one machine, one service user and its memory and processor, so this is not a boundary against someone attacking the kernel: invite people you trust.
 - The model is Sonnet 5 because Sonnet 5.5 and Opus 5.5 are not enabled on Bedrock in this account (the call fails asking for AWS Marketplace subscribe rights). Once enabled, change `MODEL` in `deploy.py`.
 
 ## MCP server (for Claude, ChatGPT and other assistants)

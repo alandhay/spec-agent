@@ -1,8 +1,11 @@
 """Check the workbench on the hosted instance without the agent: run, read, keys, assemble.
 
-    python deploy/deploy.py run "cd /opt/specdev/app && sudo -u specdev env HOME=/var/lib/specdev /opt/specdev/venv/bin/python deploy/smoke.py"
+    python deploy/deploy.py run "cd /opt/specdev/app && sudo -u specdev env HOME=/var/lib/specdev SPECDEV_SANDBOX=1 /opt/specdev/venv/bin/python deploy/smoke.py"
 
-With --agent it then asks the agent for a small program (needs the settings in /etc/specdev.env, and costs a few cents).
+With SPECDEV_SANDBOX=1 it also checks that the assembler cannot read a file outside its folder.
+With --agent it then asks the agent for a small program (costs a few cents). That needs the hosted
+settings, which only root can read: start it with
+    set -a; . /etc/specdev.env; set +a; cd /opt/specdev/app && sudo -E -u specdev HOME=/var/lib/specdev /opt/specdev/venv/bin/python deploy/smoke.py --agent
 """
 
 from __future__ import annotations
@@ -14,6 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from specdev import sandbox  # noqa: E402
 from specdev.bench import Bench  # noqa: E402
 
 programs = Path(tempfile.mkdtemp()) / "programs"
@@ -45,6 +49,15 @@ try:
     check("typing", bench.type_text("hi\n"), "got hi", "9 STOP statement, 30:1")
     check("assemble", bench.assemble("code.asm"), "4 bytes")
     check("machine code", bench.run("code.bas", 60, ["code.bin@32768"]), "1234", "0 OK, 30:1")
+    if sandbox.enabled():
+        secret = Path(tempfile.mkdtemp()) / "secret.bin"
+        secret.write_bytes(b"not yours")
+        (programs / "peek.asm").write_text(f'    org 32768\n    incbin "{secret}"\n')
+        try:
+            outcome = bench.assemble("peek.asm")
+        except Exception as exc:
+            outcome = f"refused: {exc}"
+        check("assembler confined", outcome, "refused")
     if "--agent" in sys.argv:
         from specdev.agent import Session
 

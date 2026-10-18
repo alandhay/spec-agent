@@ -76,8 +76,8 @@ class AudioTap:
 
     TRIM_BYTES = 8 * 1024 * 1024
 
-    def __init__(self) -> None:
-        self._folder = tempfile.mkdtemp(prefix="specbot-audio-")
+    def __init__(self, folder: str | None = None) -> None:
+        self._folder = tempfile.mkdtemp(prefix="specbot-audio-", dir=folder)
         self.path = os.path.join(self._folder, "audio")
         open(self.path, "wb").close()
         self._listeners: list[queue.Queue] = []
@@ -146,6 +146,7 @@ class X11Emulator(Emulator):
         keymap: dict[str, str] | None = None,
         load: str | None = None,
         sound: bool = False,
+        scratch: str | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         super().__init__(native_size=size, hold_frames=hold_frames, gap_frames=gap_frames, sleep=sleep,
@@ -156,7 +157,8 @@ class X11Emulator(Emulator):
         self._xvfb: subprocess.Popen | None = None
         self._proc: subprocess.Popen | None = None
         self._display = None
-        self.audio = AudioTap() if sound else None      # raw samples as the emulator produces them
+        # Raw samples as the emulator produces them, in a file under ``scratch`` (the emulator must be able to write there).
+        self.audio = AudioTap(scratch) if sound else None
         try:
             self._name = self._start_display()
             from Xlib import display as xdisplay

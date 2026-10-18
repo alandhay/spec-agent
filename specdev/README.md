@@ -27,11 +27,15 @@ a freshly restarted emulator and wait for the BASIC report; read the screen
 text; take a screenshot; press keys or type; assemble Z80 with sjasmplus and
 load the code from a BASIC loader. It has no shell.
 
+It keeps a few notes about you from one conversation to the next, in all your
+projects (`remember` and `forget` tools; `memory.json` in your folder). The
+**Memory** button shows them, and any can be removed there.
+
 Key presses bring the Fuse window to the front and anything you type then
 lands in the emulator; everything else works with Fuse in the background.
 
 ## Limits
 
 - One emulator, so one conversation at a time, on this machine only.
-- Nothing is remembered between conversations except the files.
+- Between conversations only the files and the agent's notes (Memory) are kept.
 - `SPECDEV_MODEL` chooses the model; otherwise Claude Code's default is used.
