@@ -1,0 +1,50 @@
+# Unit tests on every push, and the hosted workbench's Linux pieces on a real Linux machine:
+# Landlock confinement, a headless Fuse and sjasmplus, run as deploy/smoke.py runs them on the instance.
+name: tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  unit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev,agent]"
+      - run: python -m pytest -q          # specart's tests skip themselves without numba
+
+  workbench:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Fuse, Xvfb and the Spectrum ROMs
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q xvfb fuse-emulator-sdl spectrum-roms
+      - name: sjasmplus, built as deploy/setup.sh builds it
+        run: |
+          git clone -q --depth 1 https://github.com/z00m128/sjasmplus /tmp/sjasmplus
+          make -C /tmp/sjasmplus -j4 USE_LUA=0 >/dev/null
+          sudo install -m 755 /tmp/sjasmplus/sjasmplus /usr/local/bin/sjasmplus
+      - run: pip install -e ".[hosted]"
+      - name: Landlock works here
+        run: python -I specdev/sandbox.py --check
+      - name: Claude Code starts when confined
+        run: |
+          home=$(mktemp -d)
+          cli=$(python -c "from specdev.agent import claude_cli; print(claude_cli())")
+          python -I specdev/sandbox.py --write "$home" --set HOME="$home" --set TMPDIR="$home" -- "$cli" --version
+      - name: Workbench smoke test, confined
+        env:
+          SPECDEV_SANDBOX: "1"
+        run: python deploy/smoke.py
