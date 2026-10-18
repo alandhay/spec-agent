@@ -203,3 +203,38 @@ def test_guard_keeps_file_tools_in_the_folder(tmp_path):
     assert not decide(root, "Glob", {"pattern": "../*"})
     assert not decide(root, "Grep", {"pattern": "x", "path": str(tmp_path)})
     assert not decide(root, "Bash", {"command": "ls"})
+
+
+# -- the MCP server and its widget ------------------------------------------------------
+
+from specdev import mcp  # noqa: E402
+
+BASE = "https://example.test/mcp/key"
+
+
+def rpc(method, params=None, ident=1, ws=None):
+    return mcp.handle(ws, {"jsonrpc": "2.0", "id": ident, "method": method, "params": params or {}}, BASE)
+
+
+def test_mcp_tools_name_the_widget():
+    tools = {t["name"]: t for t in rpc("tools/list")["result"]["tools"]}
+    assert set(tools) == {"list_projects", "open_project", "new_project", "build", "check"}
+    for name in ("build", "check", "open_project"):
+        assert tools[name]["_meta"]["ui"]["resourceUri"] == "ui://specdev/spectrum.html"
+
+
+def test_mcp_widget_is_filled_in_for_this_server():
+    contents = rpc("resources/read", {"uri": "ui://specdev/spectrum.html"})["result"]["contents"][0]
+    assert contents["mimeType"] == "text/html;profile=mcp-app"
+    assert "__BASE__" not in contents["text"] and "__SITE__" not in contents["text"]
+    assert f'const BASE = "{BASE}"' in contents["text"]
+    assert contents["_meta"]["ui"]["csp"]["connectDomains"] == ["https://example.test"]
+    assert "error" in rpc("resources/read", {"uri": "ui://elsewhere"})
+
+
+def test_mcp_protocol_odds_and_ends():
+    assert mcp.handle(None, {"jsonrpc": "2.0", "method": "notifications/initialized"}, BASE) is None
+    assert rpc("initialize", {"protocolVersion": "2025-06-18"})["result"]["protocolVersion"] == "2025-06-18"
+    assert rpc("nonsense")["error"]["code"] == -32601
+    result = rpc("tools/call", {"name": "no_such_tool", "arguments": {}})["result"]
+    assert result["isError"] and "no tool called" in result["content"][0]["text"]

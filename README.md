@@ -78,11 +78,12 @@ its own options.
   with Linux Landlock. They still share one machine, so invite only people
   you trust.
 - **MCP server**: tools for listing, opening and creating projects and for
-  building and checking programs work. An interactive widget (live screen with
-  sound) is in progress.
-- `specdev` has unit tests for memory, the events stream, the sandbox wrapper
-  and the file guard; the Landlock confinement itself can only be tested on
-  Linux (`python specdev/sandbox.py --check`, run by every deploy).
+  building and checking programs. Hosts that support MCP Apps also show the
+  live Spectrum (screen, sound, tape download) in the chat; checked against
+  the spec in a test host, not yet inside Claude or ChatGPT.
+- CI (GitHub Actions) runs the unit tests on every push and, on a Linux
+  runner, the Landlock self-check, Claude Code starting while confined, and
+  the workbench smoke test (Fuse and sjasmplus, confined).
 
 ## Notes
 

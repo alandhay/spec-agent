@@ -2,10 +2,10 @@
 
 import io
 
-import numpy as np
 import pytest
 from PIL import Image
 
+np = pytest.importorskip("numpy")
 pytest.importorskip("numba")
 from specart import convert, multicolour, pipeline  # noqa: E402
 

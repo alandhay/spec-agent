@@ -39,21 +39,31 @@ const BASE = "__BASE__";
 const $ = id => document.getElementById(id);
 const pause = ms => new Promise(done => setTimeout(done, ms));
 
-// Talking to the assistant's app that hosts this frame (MCP Apps): say hello, say how tall we
-// are, and ask it to open links, which a sandboxed frame may not be allowed to do itself.
-let calls = 0;
-const host = (method, params, wantsAnswer = true) => {
-  try { parent.postMessage({ jsonrpc: "2.0", ...(wantsAnswer ? { id: ++calls } : {}), method, params: params || {} }, "*"); } catch (err) {}
+// Talking to the assistant's app that hosts this frame (MCP Apps, JSON-RPC over postMessage):
+// ui/initialize, and only once it is answered ui/notifications/initialized; then say how tall
+// we are, and ask the host to open links, which a sandboxed frame may not be allowed to do itself.
+let calls = 0, ready = false;
+const waiting = new Map();
+const send = message => { try { parent.postMessage({ jsonrpc: "2.0", ...message }, "*"); } catch (err) {} };
+const ask = (method, params) => new Promise(done => { const id = ++calls; waiting.set(id, done); send({ id, method, params: params || {} }); });
+const tell = (method, params) => send({ method, params: params || {} });
+window.addEventListener("message", ev => {
+  const m = ev.data;
+  if (ev.source !== parent || !m || m.jsonrpc !== "2.0") return;
+  if (m.method === undefined && waiting.has(m.id)) { waiting.get(m.id)(m); waiting.delete(m.id); return; }
+  if (m.id !== undefined && m.method) send({ id: m.id, result: {} });   // ui/resource-teardown, ping: nothing to do
+});
+const sized = () => {
+  if (ready) tell("ui/notifications/size-changed", { width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight });
 };
-host("ui/initialize", { protocolVersion: "2025-06-18", appInfo: { name: "specdev", version: "1" }, clientInfo: { name: "specdev", version: "1" },
-                        appCapabilities: {}, capabilities: {} });
-host("ui/notifications/initialized", {}, false);
-const sized = () => host("ui/notifications/size-changed", { width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight }, false);
+ask("ui/initialize", { protocolVersion: "2026-01-26", appInfo: { name: "specdev", version: "1" },
+                       clientInfo: { name: "specdev", version: "1" }, appCapabilities: {} })
+  .then(() => { tell("ui/notifications/initialized"); ready = true; sized(); });
 new ResizeObserver(sized).observe(document.body);
 for (const link of document.querySelectorAll("a.button")) {
-  link.addEventListener("click", () => {
-    if (window.openai && window.openai.openExternal) window.openai.openExternal({ href: link.href });
-    else host("ui/open-link", { url: link.href });
+  link.addEventListener("click", ev => {
+    if (window.openai && window.openai.openExternal) { ev.preventDefault(); window.openai.openExternal({ href: link.href }); }
+    else if (ready) { ev.preventDefault(); ask("ui/open-link", { url: link.href }); }
   });
 }
 
