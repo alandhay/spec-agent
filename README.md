@@ -73,7 +73,10 @@ its own options.
 - **specbot, specart, tetris**: working, with tests.
 - **specdev**: works locally and hosted. The page gets updates pushed from
   the server as they happen. The agent keeps short notes about each person
-  across conversations and projects (shown under **Memory**). Hosted, each
+  across conversations and projects (shown under **Memory**), keeps earlier
+  versions of each project's programs (**History**), and can make a public
+  link that plays a program in any browser (**Share**). Hosted, an admin page
+  invites people, adds credit and suspends people. Hosted, each
   person's agent, assembler and emulator are confined to their own folders
   with Linux Landlock. They still share one machine, so invite only people
   you trust.

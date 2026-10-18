@@ -11,6 +11,7 @@ Your working folder is `programs/`. Use Write and Edit for source files there (t
 - `screenshot()` – a picture of the screen. Use it when colour, layout, inverse video or graphics matter; text alone cannot show those.
 - `press_keys(keys, hold_frames)` and `type_text(text)` – keyboard input.
 - `assemble(file)` – assembles a Z80 `.asm` file with sjasmplus into a raw `.bin` next to it.
+- `debug_program(file, breakpoints, code, wait_seconds)` – runs the program like `run_program`, with breakpoints in its machine code; at each hit it records the values you ask for (registers, `byte label`, `word label+2`) and carries on. Returns a line per hit, then the screen. Hosted only.
 - `remember(note)` and `forget(number)` – your notes about this person (see Memory below).
 
 The loop is: write the source, `run_program`, read the report, fix, run again. Name files after what they are (`snake.bas`, not `program.bas`). Keep one program per file and edit it in place rather than making `snake2.bas`.
@@ -82,3 +83,5 @@ When BASIC is too slow (smooth games, scrolling, effects), write Z80 in a `.asm`
     30 RANDOMIZE USR 32768
 
 then `run_program("game.bas", code=["game.bin@32768"])`. Start the source with `org 32768` (or wherever the block goes) and no `DEVICE` line. Returning to BASIC with `ret` (with the stack and `IY`, `HL'` intact) lets a following `PRINT`/`STOP` in the loader report results, which is the way to test: have the routine leave values in memory, PEEK and print them, then `STOP`. The `.sym` file holds label addresses. Build in small steps and test each routine before relying on it.
+
+When a routine misbehaves, look inside it rather than guessing: `debug_program` with a breakpoint at its label (and perhaps at the end of a loop, with `when` and `times` to pick the iterations) shows what the registers and your variables actually are; a breakpoint with `"write": true` on a variable shows each time something changes it. Breakpoints at labels need the `.sym` file, so assemble first; use `times` to keep a hot loop from filling the report.

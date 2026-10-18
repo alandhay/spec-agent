@@ -25,7 +25,7 @@ from specbot.emulator import Emulator, emulator_from_config
 from specbot.errors import SpecbotError
 from specbot.tape import basic_to_tap
 
-from . import sandbox
+from . import debugger, sandbox
 
 ROOT = Path(__file__).resolve().parent.parent
 PROGRAMS = ROOT / "programs"
@@ -95,8 +95,12 @@ class Bench:
         cfg = load_config(str(CONFIG))
         return cfg.backend != "window" or bool(find_windows(cfg.window.window_title, cfg.window.window_class))
 
-    def _open(self, load: str | None = None) -> Emulator:
-        """The emulator, started if need be; with ``load`` it is restarted with that file."""
+    def _open(self, load: str | None = None, extra: list[str] | None = None, stdout: str | None = None) -> Emulator:
+        """The emulator, started if need be; with ``load`` it is restarted with that file.
+
+        ``extra`` (more arguments for Fuse) and ``stdout`` (a file for its output) are for
+        debug runs, on the headless emulator only.
+        """
         if self._emu is not None and load is None:
             try:
                 self._emu.screenshot()
@@ -106,7 +110,7 @@ class Bench:
         if not WINDOWS:
             if self._emu is not None and load is not None:
                 try:
-                    self._emu.load_file(load)
+                    self._emu.load_file(load, extra or (), stdout)
                     return self._emu
                 except SpecbotError:
                     pass                    # start again from nothing
@@ -120,7 +124,7 @@ class Bench:
             launch = sandbox.command([FUSE, *FUSE_ARGS], read=[self.programs, Path(ROM).parent], write=[scratch],
                                      network=False, env={"HOME": str(scratch)})
             self._emu = X11Emulator(LaunchConfig(launch[0], launch[1:]), rom_path=ROM, load=load, sound=True,
-                                    scratch=str(scratch))
+                                    scratch=str(scratch), extra_args=extra or (), stdout=stdout)
             return self._emu
         if self._emu is not None:
             self._emu.close()
@@ -144,6 +148,47 @@ class Bench:
 
     def run(self, file: str, wait_seconds: float = 60, code: list[str] | None = None) -> str:
         """Load a program into a freshly started emulator, wait for its report, return the screen."""
+        target = self._loadable(file, code)
+        with self._lock:
+            self.busy = f"running {file}"
+            self.last_run = file
+            try:
+                emu = self._open(load=str(target))
+                report = self._wait(emu, wait_seconds)
+                return self._screen(emu, report)
+            finally:
+                self.busy = ""
+
+    def debug(self, file: str, points: list[debugger.Breakpoint], wait_seconds: float = 30,
+              code: list[str] | None = None) -> str:
+        """Run a program with breakpoints (Fuse's debugger, scripted); return what each hit showed, then the screen."""
+        if WINDOWS:
+            raise BenchError("breakpoints need the hosted workbench: Fuse's debugger cannot be scripted on this machine")
+        target = self._loadable(file, code)
+        labels: dict[str, int] = {}
+        syms = [self.path(spec.rpartition("@")[0]).with_suffix(".sym") for spec in code or []]
+        for sym in syms or sorted(self.programs.glob("*.sym")):
+            labels.update(debugger.read_sym(sym))
+        try:
+            commands, layout = debugger.script(points, labels)
+        except debugger.DebugError as exc:
+            raise BenchError(str(exc)) from None
+        trace = self.home / "emulator" / "debug.txt"
+        trace.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock:
+            self.busy = f"debugging {file}"
+            self.last_run = file
+            try:
+                emu = self._open(load=str(target), extra=["--debugger-command", commands], stdout=str(trace))
+                report = self._wait(emu, wait_seconds)
+                screen = self._screen(emu, report)
+                seen = debugger.report(trace.read_text(encoding="utf-8", errors="replace"), layout, labels)
+                return f"{seen}\n\n{screen}"
+            finally:
+                self.busy = ""
+
+    def _loadable(self, file: str, code: list[str] | None) -> Path:
+        """The file to give the emulator: a .bas converted to a tape (with any code blocks), else the file itself."""
         source = self.path(file)
         if not source.is_file():
             raise BenchError(f"programs/{file} does not exist")
@@ -168,15 +213,7 @@ class Bench:
             target = source
         else:
             raise BenchError(f"cannot run a {suffix or 'file without an extension'}; give a .bas, .tap, .tzx, .sna or .z80")
-        with self._lock:
-            self.busy = f"running {file}"
-            self.last_run = file
-            try:
-                emu = self._open(load=str(target))
-                report = self._wait(emu, wait_seconds)
-                return self._screen(emu, report)
-            finally:
-                self.busy = ""
+        return target
 
     def screen_text(self, wait_seconds: float = 0) -> str:
         with self._lock:

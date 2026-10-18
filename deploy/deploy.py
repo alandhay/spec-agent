@@ -30,6 +30,9 @@ MCP_PERSON_FILE = ROOT / "deploy" / "mcp-person.txt"   # kept out of the reposit
 # file above ("" = no MCP server).
 MCP_PERSON = os.environ.get("SPECDEV_MCP_PERSON") or (MCP_PERSON_FILE.read_text().strip() if MCP_PERSON_FILE.is_file() else "")
 MCP_KEY_FILE = ROOT / "deploy" / "mcp-key.txt"     # the access key in the MCP address; made on first deploy
+# Who may use the admin page: sign-in addresses, one per line, kept out of the repository; else the MCP person.
+ADMINS_FILE = ROOT / "deploy" / "admins.txt"
+ADMINS = (ADMINS_FILE.read_text().split() if ADMINS_FILE.is_file() else []) or ([MCP_PERSON] if MCP_PERSON else [])
 
 
 def mcp_settings(out: dict[str, str]) -> list[str]:
@@ -52,8 +55,20 @@ def publish_page(out: dict[str, str]) -> None:
         json.dump(config, fh)
     aws("s3", "cp", fh.name, f"s3://{out['Bucket']}/site/api/config", "--content-type", "application/json")
     Path(fh.name).unlink()
-    aws("s3", "cp", str(ROOT / "specdev" / "static" / "index.html"), f"s3://{out['Bucket']}/site/index.html",
-        "--content-type", "text/html; charset=utf-8")
+    for page in ("index.html", "admin.html"):
+        aws("s3", "cp", str(ROOT / "specdev" / "static" / page), f"s3://{out['Bucket']}/site/{page}",
+            "--content-type", "text/html; charset=utf-8")
+    # The browser emulator that share links play in (JSSpeccy, pinned by its checksum in specdev/share.py).
+    sys.path.insert(0, str(ROOT))
+    from specdev.share import CONTENT_TYPES, player_files
+
+    with tempfile.TemporaryDirectory() as folder:
+        for name, data in player_files().items():
+            path = Path(folder, name)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+            aws("s3", "cp", str(path), f"s3://{out['Bucket']}/site/player/{name}",
+                "--content-type", CONTENT_TYPES.get(path.suffix, "text/plain; charset=utf-8"))
 
 
 def start(instance: str) -> None:
@@ -147,6 +162,7 @@ def main() -> int:
         "SPECDEV_DATA=/var/lib/specdev/data",
         "SPECDEV_ACTIVITY=/var/lib/specdev/last-active",
         "SPECDEV_SANDBOX=1",
+        f"SPECDEV_ADMINS={','.join(ADMINS)}",
         f"SPECDEV_STOP_MINUTES={STOP_MINUTES}",
         f"SPECDEV_STARTING_BUDGET={STARTING_BUDGET}",
         "CLAUDE_CODE_USE_BEDROCK=1",

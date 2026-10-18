@@ -40,7 +40,7 @@ from claude_agent_sdk import (
 
 from specbot.errors import SpecbotError
 
-from . import sandbox
+from . import debugger, sandbox
 from .bench import Bench, BenchError
 from .memory import Memory
 
@@ -116,7 +116,37 @@ def make_tools(bench: Bench, memory: Memory | None = None) -> list:
     async def assemble(args):
         return await call(bench.assemble, args["file"])
 
-    tools = [run_program, read_screen, screenshot, press_keys, type_text, assemble]
+    shows = {"type": "array", "items": {"type": "string"},
+             "description": 'Values to show at each hit: registers (A, HL, IX, SP, AF\'...), "byte X" or "word X" '
+                            "for memory at a label or address, or expressions of these (e.g. \"word ptr+2\", \"HL-DE\")."}
+
+    @tool("debug_program",
+          "Run a program like run_program, but with breakpoints in its machine code (Fuse's debugger). At each "
+          "breakpoint hit the values asked for are recorded and the program carries on; returns a line per hit, "
+          "then the screen and BASIC report. Labels come from the .sym file the assembler wrote. Use it to see "
+          "registers and memory inside a routine instead of guessing from the screen.",
+          _schema(["file", "breakpoints"],
+                  file={"type": "string", "description": "The .bas loader (or a tape) in programs/"},
+                  code={"type": "array", "items": {"type": "string"},
+                        "description": 'Machine-code blocks for LOAD "" CODE, each FILE@ADDRESS, as for run_program'},
+                  breakpoints={"type": "array", "maxItems": 10, "items": {"type": "object", "properties": {
+                      "at": {"type": "string", "description": "Label or address of the instruction to stop at, e.g. "
+                                                                "\"main_loop\", \"draw+3\", \"0x8010\""},
+                      "show": shows,
+                      "when": {"type": "string", "description": "Only count hits when this holds, e.g. \"B==3\", "
+                                                                  "\"byte lives==0\""},
+                      "times": {"type": "integer", "description": "Hits to record (default 5, at most 50)"},
+                      "write": {"type": "boolean", "description": "Instead stop when the program writes to this "
+                                                                  "address (a watch)"}},
+                      "required": ["at"]}},
+                  wait_seconds={**seconds, "default": 30}))
+    async def debug_program(args):
+        points = [debugger.Breakpoint(at=str(b.get("at", "")), show=[str(s) for s in b.get("show") or []],
+                                      when=str(b.get("when") or ""), times=int(b.get("times") or 5),
+                                      write=bool(b.get("write"))) for b in args.get("breakpoints") or []]
+        return await call(bench.debug, args["file"], points, args.get("wait_seconds", 30), args.get("code") or [])
+
+    tools = [run_program, read_screen, screenshot, press_keys, type_text, assemble, debug_program]
     if memory is None:
         return tools
 

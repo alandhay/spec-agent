@@ -26,6 +26,8 @@ programs.mkdir()
 (programs / "ask.bas").write_text('10 INPUT a$\n20 PRINT "got ";a$\n30 STOP\n')
 (programs / "code.asm").write_text("    org 32768\n    ld bc,1234\n    ret\n")
 (programs / "code.bas").write_text('10 CLEAR 32767\n20 LOAD "" CODE\n30 PRINT USR 32768\n')
+(programs / "dbg.asm").write_text("    org 32768\nstart:\n    ld a,42\n    ld hl,1234\n    ld (store),hl\n"
+                                  "    ld b,3\nloop:\n    djnz loop\nhere:\n    ret\nstore:\n    dw 0\n")
 
 bench = Bench(programs)
 failed = False
@@ -49,6 +51,12 @@ try:
     check("typing", bench.type_text("hi\n"), "got hi", "9 STOP statement, 30:1")
     check("assemble", bench.assemble("code.asm"), "4 bytes")
     check("machine code", bench.run("code.bas", 60, ["code.bin@32768"]), "1234", "0 OK, 30:1")
+    from specdev.debugger import Breakpoint
+
+    check("assemble with labels", bench.assemble("dbg.asm"), "bytes")
+    check("breakpoints", bench.debug("code.bas", [Breakpoint("here", ["A", "HL", "word store"]),
+                                                  Breakpoint("loop", ["B"], times=2)], 60, ["dbg.bin@32768"]),
+          "#1 at here", "A=42 (0x2a)", "HL=1234 (0x04d2)", "word store=1234", "#2 at loop", "hit 2: B=2", "0 OK, 30:1")
     if sandbox.enabled():
         secret = Path(tempfile.mkdtemp()) / "secret.bin"
         secret.write_bytes(b"not yours")

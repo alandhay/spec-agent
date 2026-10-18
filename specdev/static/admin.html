@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SpecDev admin</title>
+<style>
+  /* The workbench's people: invite, credit, suspend. Uses the workbench's sign-in (its cookie). */
+  :root { --bg: #101114; --panel: #181a1f; --panel-2: #20232a; --line: #2c3038; --text: #e8e9ec; --dim: #9aa0aa;
+    --accent: #ffd400; --good: #3ddc84; --bad: #ff6b5b; --mono: ui-monospace, "Cascadia Mono", Consolas, monospace; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, "Segoe UI", sans-serif; }
+  header { display: flex; gap: 16px; align-items: center; padding: 12px 20px; border-bottom: 1px solid var(--line); }
+  header h1 { margin: 0; font-size: 17px; }
+  header a { color: var(--dim); margin-left: auto; }
+  main { padding: 16px 20px; max-width: 1200px; }
+  .say { color: var(--dim); margin: 0 0 14px; }
+  form { display: flex; gap: 8px; margin-bottom: 18px; flex-wrap: wrap; }
+  input { font: inherit; background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; min-width: 260px; }
+  button, select { font: inherit; font-size: 13px; background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #111; font-weight: 600; }
+  button:disabled { opacity: .5; cursor: default; }
+  .table { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; min-width: 900px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--dim); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; background: var(--panel); }
+  td.num { font-variant-numeric: tabular-nums; text-align: right; }
+  .tag { font-size: 12px; padding: 1px 7px; border-radius: 9px; border: 1px solid var(--line); color: var(--dim); white-space: nowrap; }
+  .tag.ok { color: var(--good); border-color: #2b5c3f; }
+  .tag.bad { color: var(--bad); border-color: #6b2f29; }
+  .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  tr.log td { background: var(--panel); }
+  tr.log pre { margin: 0; font: 12px/1.5 var(--mono); white-space: pre-wrap; color: var(--dim); max-height: 260px; overflow: auto; }
+  small { color: var(--dim); }
+  .notice { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); background: #3a1d1b; border: 1px solid var(--bad);
+    padding: 9px 16px; border-radius: 8px; cursor: pointer; max-width: 90vw; }
+  .notice.good { background: #1d3a24; border-color: #2b5c3f; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header><h1>SpecDev admin</h1><a href="/">Back to the workbench</a></header>
+<main>
+  <p class="say" id="say">Loading&hellip;</p>
+  <form id="invite" hidden>
+    <input type="email" id="email" placeholder="someone@example.com" required>
+    <button class="primary">Invite</button>
+    <small>They get an email with a temporary password.</small>
+  </form>
+  <div class="table" id="tableBox" hidden>
+    <table>
+      <thead><tr><th>Person</th><th>Status</th><th>Last seen</th><th>Projects</th><th>Requests</th>
+        <th>Spent</th><th>Left</th><th></th></tr></thead>
+      <tbody id="people"></tbody>
+    </table>
+  </div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; };
+const when = t => t ? new Date(t * 1000).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "—";
+const money = v => v === undefined || v === null ? "—" : "$" + v.toFixed(2);
+function notice(text, good) {
+  const strip = el("div", "notice" + (good ? " good" : ""), text);
+  strip.onclick = () => strip.remove(); document.body.append(strip); setTimeout(() => strip.remove(), 6000);
+}
+async function post(path, body) {
+  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || r.statusText);
+  return data;
+}
+
+let grants = [], hosted = false, you = "";
+function status(p) {
+  if (!hosted) return ["This machine", "ok"];
+  if (p.suspended) return ["Suspended", "bad"];
+  if (p.enabled === false) return ["Sign-in disabled", "bad"];
+  if (p.status === "FORCE_CHANGE_PASSWORD") return ["Invited", ""];
+  return [p.last ? "Active" : "Not signed in yet", p.last ? "ok" : ""];
+}
+
+function row(p) {
+  const tr = el("tr");
+  const who = el("td");
+  who.append(el("div", "", (p.email || (hosted ? "(no address yet)" : "You")) + (p.id === you && hosted ? "  (you)" : "")), el("small", "", p.id));
+  const [text, kind] = status(p);
+  const state = el("td"); state.append(el("span", "tag " + kind, text));
+  const a = p.account;
+  const actions = el("div", "actions");
+  if (hosted) {
+    const pick = el("select");
+    for (const g of grants) pick.append(new Option("+ $" + g, g));
+    const give = el("button", "", "Add credit");
+    give.onclick = async () => {
+      give.disabled = true;
+      try { await post("/api/admin/grant", { id: p.id, amount: Number(pick.value) }); notice("Added $" + pick.value + " for " + (p.email || p.id), true); load(); }
+      catch (err) { notice(err.message); give.disabled = false; }
+    };
+    actions.append(pick, give);
+  }
+  if (p.id !== you) {
+    const stop = el("button", "", p.suspended ? "Restore" : "Suspend");
+    stop.onclick = async () => {
+      stop.disabled = true;
+      try { await post("/api/admin/suspend", { id: p.id, suspended: !p.suspended }); load(); }
+      catch (err) { notice(err.message); stop.disabled = false; }
+    };
+    actions.append(stop);
+  }
+  const logBtn = el("button", "", "Requests");
+  actions.append(logBtn);
+  const cells = [who, state, el("td", "", when(p.last)), el("td", "num", p.projects), el("td", "num", p.requests),
+                 el("td", "num", a ? money(a.spent) : "—"), el("td", "num", a ? money(a.remaining) + " of " + money(a.granted) : "—")];
+  const last = el("td"); last.append(actions);
+  tr.append(...cells, last);
+  const logRow = el("tr", "log"); logRow.hidden = true;
+  const logCell = el("td"); logCell.colSpan = 8; logRow.append(logCell);
+  logBtn.onclick = async () => {
+    if (!logRow.hidden) { logRow.hidden = true; return; }
+    try {
+      const { log } = await (await fetch("/api/admin/log?id=" + encodeURIComponent(p.id))).json();
+      const lines = log.map(e => e.request !== undefined
+        ? `${e.at}  $${(e.cost || 0).toFixed(3)}  ${e.seconds}s  ${e.failed ? "FAILED  " : ""}${e.request}`
+        : `${e.at}  ${e.grant !== undefined ? "granted $" + e.grant + (e.by ? " by " + e.by : "") : "topped up $" + e.top_up}`);
+      logCell.replaceChildren(el("pre", "", lines.length ? lines.join("\n") : "Nothing yet."));
+      logRow.hidden = false;
+    } catch (err) { notice(err.message); }
+  };
+  return [tr, logRow];
+}
+
+async function load() {
+  let r;
+  for (;;) {
+    r = await fetch("/api/admin/people");
+    if (r.status < 500) break;
+    $("say").textContent = "The workbench is asleep; starting it (about a minute)…";
+    await fetch("/wake").catch(() => {});
+    await new Promise(done => setTimeout(done, 3000));
+  }
+  if (r.status === 401) { $("say").innerHTML = 'Sign in on <a href="/">the workbench</a> first, then come back here.'; return; }
+  const data = await r.json();
+  if (!r.ok) { $("say").textContent = data.error || r.statusText; return; }
+  ({ grants, hosted, you } = data);
+  $("say").textContent = hosted
+    ? data.people.length + " people. Suspending someone stops their agent and their sign-in at once."
+    : "Your own machine: there is one person and no budgets. Inviting and credit need the hosted workbench.";
+  $("invite").hidden = !hosted;
+  $("people").replaceChildren(...data.people.flatMap(row));
+  $("tableBox").hidden = false;
+}
+$("invite").onsubmit = async ev => {
+  ev.preventDefault();
+  try { await post("/api/admin/invite", { email: $("email").value.trim() }); notice("Invited " + $("email").value.trim(), true); $("email").value = ""; load(); }
+  catch (err) { notice(err.message); }
+};
+load();
+</script>
+</body>
+</html>

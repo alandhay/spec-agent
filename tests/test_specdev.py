@@ -218,7 +218,7 @@ def rpc(method, params=None, ident=1, ws=None):
 
 def test_mcp_tools_name_the_widget():
     tools = {t["name"]: t for t in rpc("tools/list")["result"]["tools"]}
-    assert set(tools) == {"list_projects", "open_project", "new_project", "build", "check"}
+    assert set(tools) == {"list_projects", "open_project", "new_project", "build", "share", "check"}
     for name in ("build", "check", "open_project"):
         assert tools[name]["_meta"]["ui"]["resourceUri"] == "ui://specdev/spectrum.html"
 
@@ -238,3 +238,241 @@ def test_mcp_protocol_odds_and_ends():
     assert rpc("nonsense")["error"]["code"] == -32601
     result = rpc("tools/call", {"name": "no_such_tool", "arguments": {}})["result"]
     assert result["isError"] and "no tool called" in result["content"][0]["text"]
+
+
+# -- project history -------------------------------------------------------------------
+
+from specdev import projects  # noqa: E402
+from specdev.projects import Project  # noqa: E402
+
+
+def test_history_keeps_changed_versions_only(tmp_path):
+    project = Project(tmp_path / "p")
+    assert project.keep_version("empty") is None                 # nothing to keep yet
+    (project.programs / "a.bas").write_text("10 PRINT 1\n")
+    (project.programs / "a.tap").write_bytes(b"tape")            # not a source file: not kept
+    assert project.keep_version("first")["files"] == ["a.bas"]
+    assert project.keep_version("again") is None                 # unchanged
+    (project.programs / "a.bas").write_text("10 PRINT 2\n")
+    assert project.keep_version("second")["n"] == 2
+    assert [v["why"] for v in project.versions()] == ["first", "second"]
+    assert project.version_file(1, "a.bas") == (project.programs / "a.bas").read_bytes().replace(b"2", b"1")
+
+
+def test_history_restore_can_be_undone(tmp_path):
+    project = Project(tmp_path / "p")
+    (project.programs / "a.bas").write_text("10 PRINT 1\n")
+    project.keep_version("one")
+    (project.programs / "a.bas").write_text("10 PRINT 2\n")
+    (project.programs / "b.asm").write_text("ret\n")
+    assert project.restore(1) == ["a.bas", "b.asm"]
+    assert (project.programs / "a.bas").read_text() == "10 PRINT 1\n"
+    assert not (project.programs / "b.asm").exists()
+    before = project.versions()[-1]
+    assert before["why"] == "before going back to version 1" and before["files"] == ["a.bas", "b.asm"]
+    project.restore(before["n"])
+    assert (project.programs / "b.asm").read_text() == "ret\n"
+    with pytest.raises(KeyError):
+        project.restore(99)
+
+
+def test_history_drops_the_oldest(tmp_path, monkeypatch):
+    monkeypatch.setattr(projects, "MAX_VERSIONS", 3)
+    project = Project(tmp_path / "p")
+    for i in range(5):
+        (project.programs / "a.bas").write_text(f"10 PRINT {i}\n")
+        project.keep_version(str(i))
+    assert [v["n"] for v in project.versions()] == [3, 4, 5]
+    assert sorted(p.name for p in (project.folder / "history").iterdir()) == ["3", "4", "5"]
+
+
+# -- share links ------------------------------------------------------------------------
+
+from specdev import share  # noqa: E402
+
+
+class FakeS3:
+    def __init__(self):
+        self.objects = {}
+
+    def put_object(self, Bucket, Key, Body, ContentType):
+        self.objects[Key] = (Body, ContentType)
+
+    def delete_objects(self, Bucket, Delete):
+        for item in Delete["Objects"]:
+            self.objects.pop(item["Key"], None)
+
+
+def test_share_publishes_page_tape_and_source(tmp_path):
+    source = tmp_path / "stars.bas"
+    source.write_bytes(b"10 PRINT 1\n")
+    s3 = FakeS3()
+    shares = share.Shares(tmp_path / "shared", "bucket", s3)
+    ident = shares.publish(None, "Stars <b>", b"TAPE", source)
+    assert len(ident) >= 12
+    assert sorted(p.name for p in (tmp_path / "shared").iterdir()) == [f"{ident}.{e}" for e in ("bas", "html", "tap")]
+    page = (tmp_path / "shared" / f"{ident}.html").read_text(encoding="utf-8")
+    assert "Stars &lt;b&gt;" in page and f'"openUrl": "{ident}.tap"' in page and "../player/jsspeccy.js" in page
+    assert s3.objects[f"site/play/{ident}.html"][1].startswith("text/html")
+    assert s3.objects[f"site/play/{ident}.tap"][0] == b"TAPE"
+
+
+def test_share_again_keeps_the_link_and_withdraw_removes_it(tmp_path):
+    s3 = FakeS3()
+    shares = share.Shares(tmp_path / "shared", "bucket", s3)
+    source = tmp_path / "a.bas"
+    source.write_bytes(b"10 PRINT 1\n")
+    ident = shares.publish(None, "A", b"ONE", source)
+    assert shares.publish(ident, "A", b"TWO", None) == ident
+    assert (tmp_path / "shared" / f"{ident}.tap").read_bytes() == b"TWO"
+    assert not (tmp_path / "shared" / f"{ident}.bas").exists()      # the source was not shared this time
+    shares.withdraw(ident)
+    assert not any((tmp_path / "shared").iterdir()) and not s3.objects
+
+
+# -- the admin side -----------------------------------------------------------------------
+
+import datetime  # noqa: E402
+
+from specdev import admin  # noqa: E402
+from specdev.server import budget_of, change_account  # noqa: E402
+
+ALICE = "11111111-2222-3333-4444-555555555555"
+BOB = "66666666-7777-8888-9999-000000000000"
+
+
+class FakeCognito:
+    def __init__(self):
+        self.calls = []
+
+    def get_paginator(self, name):
+        users = [{"Username": ALICE, "Enabled": True, "UserStatus": "CONFIRMED",
+                  "UserCreateDate": datetime.datetime(2026, 10, 1, tzinfo=datetime.timezone.utc),
+                  "Attributes": [{"Name": "sub", "Value": ALICE}, {"Name": "email", "Value": "alice@example.com"}]},
+                 {"Username": BOB, "Enabled": True, "UserStatus": "FORCE_CHANGE_PASSWORD",
+                  "UserCreateDate": datetime.datetime(2026, 10, 2, tzinfo=datetime.timezone.utc),
+                  "Attributes": [{"Name": "sub", "Value": BOB}, {"Name": "email", "Value": "bob@example.com"}]}]
+        return type("P", (), {"paginate": lambda self, **kw: [{"Users": users}]})()
+
+    def admin_create_user(self, **kw):
+        self.calls.append(("create", kw["Username"]))
+
+    def admin_disable_user(self, **kw):
+        self.calls.append(("disable", kw["Username"]))
+
+    def admin_enable_user(self, **kw):
+        self.calls.append(("enable", kw["Username"]))
+
+
+def test_admin_lists_people_with_folders_and_invitations(tmp_path):
+    home = tmp_path / ALICE
+    home.mkdir()
+    admin.seen(home, "alice@example.com")
+    change_account(home, {"request": "a game", "at": "2026-10-18T10:00:00Z", "cost": 0.5}, spent=0.5)
+    (home / "projects" / "p1").mkdir(parents=True)
+    (tmp_path / "shared").mkdir()                      # not a person
+    people = admin.people(tmp_path, admin.Pool("us-east-1_x", FakeCognito()), budget_of)
+    assert [p["id"] for p in people] == [ALICE, BOB]
+    alice, bob = people
+    assert alice["email"] == "alice@example.com" and alice["requests"] == 1 and alice["projects"] == 1
+    assert alice["account"]["spent"] == 0.5 and alice["status"] == "CONFIRMED"
+    assert bob["last"] is None and bob["status"] == "FORCE_CHANGE_PASSWORD" and bob["account"] is None
+
+
+def test_admin_suspend_and_seen(tmp_path):
+    home = tmp_path / ALICE
+    home.mkdir()
+    assert not admin.suspended(home)
+    admin.update_person(home, suspended=True)
+    assert admin.suspended(home)
+    admin.seen(home, "alice@example.com")
+    assert admin.person(home)["email"] == "alice@example.com" and admin.suspended(home)
+
+
+def test_admin_pool_calls(tmp_path):
+    cognito = FakeCognito()
+    pool = admin.Pool("us-east-1_x", cognito)
+    pool.invite("carol@example.com")
+    pool.enable(ALICE, False)
+    pool.enable(ALICE, True)
+    assert cognito.calls == [("create", "carol@example.com"), ("disable", ALICE), ("enable", ALICE)]
+
+
+def test_admin_requests_through_the_server(tmp_path, monkeypatch):
+    from specdev import server
+
+    cognito = FakeCognito()
+    monkeypatch.setattr(server, "DATA", tmp_path)
+    monkeypatch.setattr(server, "POOL", "us-east-1_x")
+    monkeypatch.setattr(server, "POOL_ADMIN", admin.Pool("us-east-1_x", cognito))
+    monkeypatch.setattr(server, "ADMINS", {"boss@example.com"})
+    me = type("W", (), {"is_admin": True, "email": "boss@example.com", "home": tmp_path / BOB})()
+    assert server.Handler._admin(me, "/api/admin/invite", {"email": "carol@example.com"}) == {"invited": "carol@example.com"}
+    with pytest.raises(server.Refused):
+        server.Handler._admin(me, "/api/admin/invite", {"email": "not an address"})
+    granted = server.Handler._admin(me, "/api/admin/grant", {"id": ALICE, "amount": 20})
+    assert granted["account"]["granted"] == server.STARTING_BUDGET + 20
+    assert admin.log_tail(tmp_path / ALICE)[0] == {**admin.log_tail(tmp_path / ALICE)[0], "grant": 20, "by": "boss@example.com"}
+    with pytest.raises(server.Refused):
+        server.Handler._admin(me, "/api/admin/grant", {"id": ALICE, "amount": 5000})
+    with pytest.raises(server.Refused):
+        server.Handler._admin(me, "/api/admin/grant", {"id": "../etc", "amount": 5})
+    assert server.Handler._admin(me, "/api/admin/suspend", {"id": ALICE, "suspended": True}) == {"suspended": True}
+    assert admin.suspended(tmp_path / ALICE) and ("disable", ALICE) in cognito.calls
+    with pytest.raises(server.Refused):
+        server.Handler._admin(me, "/api/admin/suspend", {"id": BOB, "suspended": True})      # yourself
+    not_admin = type("W", (), {"is_admin": False, "email": "x@example.com", "home": tmp_path / "x"})()
+    with pytest.raises(server.Refused):
+        server.Handler._admin(not_admin, "/api/admin/invite", {"email": "carol@example.com"})
+
+
+# -- breakpoints ----------------------------------------------------------------------------
+
+from specdev import debugger  # noqa: E402
+
+LABELS = {"start": 0x8000, "loop": 0x8008, "here": 0x800A, "store": 0x800B}
+
+
+def test_debugger_reads_sym_files(tmp_path):
+    sym = tmp_path / "x.sym"
+    sym.write_text("here: EQU 0x0000800A\nstart: EQU 0x00008000\n; a comment\n")
+    assert debugger.read_sym(sym) == {"here": 0x800A, "start": 0x8000}
+    assert debugger.read_sym(tmp_path / "missing.sym") == {}
+
+
+def test_debugger_addresses_and_expressions():
+    assert debugger.address("here", LABELS) == 0x800A
+    assert debugger.address("here+2", LABELS) == 0x800C
+    assert debugger.address("0x5C00", LABELS) == 0x5C00 and debugger.address("$5c00", LABELS) == 0x5C00
+    assert debugger.address("5C00h", LABELS) == 0x5C00 and debugger.address("23552", LABELS) == 23552
+    assert debugger.expression("HL", LABELS) == "z80:hl"
+    assert debugger.expression("AF'", LABELS) == "z80:af_"
+    assert debugger.expression("byte store", LABELS) == "[32779]"
+    assert debugger.expression("word store+1", LABELS) == "([32780]+256*[32781])"
+    assert debugger.expression("B==3 && byte 0x5C00>0", LABELS) == "z80:b==3 && [23552]>0"
+    for bad in ("nolabel", "system(1)", "HL; exit", "", "byte nowhere"):
+        with pytest.raises(debugger.DebugError):
+            debugger.expression(bad, LABELS)
+    with pytest.raises(debugger.DebugError):
+        debugger.address("0x10000", LABELS)
+
+
+def test_debugger_script_and_report():
+    points = [debugger.Breakpoint("here", ["A", "word store"]), debugger.Breakpoint("loop", ["B"], when="B<3", times=2),
+              debugger.Breakpoint("store", ["PC"], write=True, times=1)]
+    commands, layout = debugger.script(points, LABELS)
+    assert "breakpoint 32778 if $h1<5\ncommands 1\nset $h1 $h1+1" in commands
+    assert "breakpoint 32776 if $h2<2 && (z80:b<3)" in commands
+    assert "breakpoint write 32779 if $h3<1" in commands
+    m = debugger.MARK
+    printed = "\n".join(hex(v) for v in [m + 2, 0x8008, 2, m + 2, 0x8008, 1, m + 3, 0x8006, 0x8006, m + 1, 0x800A, 42, 1234])
+    seen = debugger.report("Fuse says hello\n" + printed, layout, LABELS)
+    assert seen.splitlines() == [
+        "#2 at loop (0x8008), hit 1: B=2 (0x02)",
+        "#2 at loop (0x8008), hit 2: B=1 (0x01)",
+        "#3 write to store (0x800b), hit 1, PC=0x8006 (at or just after the writing instruction): PC=32774 (0x8006)",
+        "#1 at here (0x800a), hit 1: A=42 (0x2a)  word store=1234 (0x04d2)"]
+    assert debugger.report("", layout, LABELS) == "No breakpoint was hit."
+    assert debugger.report(hex(m + 1) + "\n0x800a\n1\n0x0", layout, LABELS).endswith("Not hit: #2, #3.")
+    with pytest.raises(debugger.DebugError):
+        debugger.script([], LABELS)

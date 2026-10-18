@@ -17,8 +17,10 @@ Parameters:
     Type: String
     Description: Id of the managed prefix list com.amazonaws.global.cloudfront.origin-facing.
   Image:
-    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
-    Default: /aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id
+    # A fixed image id, so that updating the stack never replaces the instance (and its disk) with a newer
+    # Ubuntu. Look up the current one with: aws ssm get-parameter --name
+    # /aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id --query Parameter.Value
+    Type: AWS::EC2::Image::Id
   Port:
     Type: Number
     Default: 8766
@@ -67,6 +69,9 @@ Resources:
               - Effect: Allow
                 Action: s3:ListBucket
                 Resource: !GetAtt Bucket.Arn
+              - Effect: Allow                 # the admin page: list, invite, suspend people
+                Action: [cognito-idp:ListUsers, cognito-idp:AdminCreateUser, cognito-idp:AdminDisableUser, cognito-idp:AdminEnableUser]
+                Resource: !GetAtt UserPool.Arn
 
   BucketPolicy:                         # CloudFront may read the page, nothing else
     Type: AWS::S3::BucketPolicy

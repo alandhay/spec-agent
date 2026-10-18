@@ -147,6 +147,8 @@ class X11Emulator(Emulator):
         load: str | None = None,
         sound: bool = False,
         scratch: str | None = None,
+        extra_args: Sequence[str] = (),
+        stdout: str | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         super().__init__(native_size=size, hold_frames=hold_frames, gap_frames=gap_frames, sleep=sleep,
@@ -167,7 +169,7 @@ class X11Emulator(Emulator):
             self._keymap = {**default_keymap(), **(keymap or {})}
             self._driver = XTestDriver(self._display, self._lock)
             self._player = ChordPlayer(self._driver, self._keymap, sleep)
-            self._start_emulator(load)
+            self._start_emulator(load, extra_args, stdout)
         except BaseException:
             self.close()
             raise
@@ -195,8 +197,9 @@ class X11Emulator(Emulator):
             raise SpecbotError("Xvfb did not start")
         return f":{number.decode()}"
 
-    def _start_emulator(self, load: str | None) -> None:
-        cmd = [self._launch.path, *self._launch.args]
+    def _start_emulator(self, load: str | None, extra_args: Sequence[str] = (), stdout: str | None = None) -> None:
+        """Start the emulator, with ``extra_args`` after the configured ones; its output goes to ``stdout`` if given."""
+        cmd = [self._launch.path, *self._launch.args, *extra_args]
         if load:
             load = os.path.abspath(load)
             if not os.path.isfile(load):
@@ -207,7 +210,12 @@ class X11Emulator(Emulator):
             env.update(SDL_AUDIODRIVER="disk", SDL_DISKAUDIOFILE=self.audio.path)
         log.info("launching %s on %s", " ".join(cmd), self._name)
         try:
-            self._proc = subprocess.Popen(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            out = open(stdout, "wb") if stdout else subprocess.DEVNULL
+            try:
+                self._proc = subprocess.Popen(cmd, env=env, stdout=out, stderr=subprocess.DEVNULL)
+            finally:
+                if stdout:
+                    out.close()
         except OSError as exc:
             raise SpecbotError(f"could not launch {self._launch.path}: {exc}") from None
         deadline = time.monotonic() + START_TIMEOUT_S
@@ -236,11 +244,11 @@ class X11Emulator(Emulator):
             proc.kill()
             proc.wait(timeout=5)
 
-    def load_file(self, path: str) -> None:
-        """Load a tape/snapshot by restarting the emulator with it (state is lost)."""
+    def load_file(self, path: str, extra_args: Sequence[str] = (), stdout: str | None = None) -> None:
+        """Load a tape/snapshot by restarting the emulator with it (state is lost); see _start_emulator."""
         self._player.release_held()
         self._stop_emulator()
-        self._start_emulator(path)
+        self._start_emulator(path, extra_args, stdout)
 
     # -- screen and keys ---------------------------------------------------
 

@@ -51,6 +51,11 @@ TOOLS = [
                     "and download links for the program.",
      "inputSchema": {"type": "object", "properties": {"request": {"type": "string"}}, "required": ["request"]},
      "_meta": SHOWS_UI},
+    {"name": "share",
+     "description": "Make a public link to the open project's program, as last run: a web page where anyone can play "
+                    "it in the browser, without signing in. Give the person the link. Calling it again updates "
+                    "the same link.",
+     "inputSchema": {"type": "object", "properties": {}}},
     {"name": "check",
      "description": "See how the open project is doing: whether the agent is still working, what it last said, the "
                     "emulator screen now, and download links for the programs.",
@@ -132,6 +137,9 @@ def _call(ws, base: str, name: str, args: dict) -> list[dict]:
         ws.say(request, None, "")
         _wait(ws, WAIT_S)
         return _report(ws, base)
+    if name == "share":
+        site = "/".join(base.split("/")[:3])
+        return [{"type": "text", "text": f"Anyone can play it here: {site}{ws.share()}"}]
     if name == "check":
         _wait(ws, args.get("wait_seconds") or 0)
         return _report(ws, base)

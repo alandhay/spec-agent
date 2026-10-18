@@ -36,6 +36,8 @@
     border: 1px solid var(--line); border-radius: 8px; padding: 8px; display: flex; gap: 6px; white-space: nowrap;
     box-shadow: 0 6px 20px #0008; }
   .budget[hidden], .budget .amounts[hidden] { display: none; }
+  .adminLink { color: var(--dim); font-size: 13px; }
+  .adminLink[hidden] { display: none; }
 
   /* Three panes with two draggable dividers: chat | (Spectrum over Program). */
   main { padding: 16px; display: grid; min-height: 0;
@@ -140,8 +142,24 @@
   .card .what { padding: 8px 10px; display: grid; gap: 2px; }
   .card .what b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .card .what span { color: var(--dim); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .history { display: grid; grid-template-columns: minmax(180px, 260px) minmax(0, 1fr); min-height: 0; flex: 1; height: 70vh; }
+  .versions { border-right: 1px solid var(--line); overflow-y: auto; }
+  .versions button { display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line);
+    border-radius: 0; background: none; padding: 8px 12px; }
+  .versions button.on { background: var(--panel-2); color: var(--accent); }
+  .versions small { display: block; color: var(--dim); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .version { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .version .tabs { border-bottom: 1px solid var(--line); }
+  .version pre { flex: 1; margin: 0; padding: 10px 14px; overflow: auto; font: 13px/1.5 var(--mono); }
+  .version .bar { padding: 8px 12px; border-top: 1px solid var(--line); display: flex; gap: 10px; align-items: center; font-size: 13px; color: var(--dim); }
+  .version .bar span { flex: 1; }
+  pre .add { background: #1d3a24; display: block; }
+  pre .del { background: #3a1d1b; color: #c99; display: block; text-decoration: line-through; }
+  @media (max-width: 700px) { .history { grid-template-columns: minmax(0, 1fr); height: auto; } }
   .notes { padding: 8px 16px 16px; overflow-y: auto; }
   .notes p { color: var(--dim); font-size: 13px; margin: 8px 0 12px; }
+  .notes a { color: var(--accent); word-break: break-all; }
+  .note[hidden] { display: none; }
   .note { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-top: 1px solid var(--line); font-size: 14px; }
   .note span { flex: 1; }
   .note small { color: var(--dim); font-size: 12px; white-space: nowrap; }
@@ -187,6 +205,7 @@
     <button class="small" id="topup" title="Add to your budget">Top up</button>
     <div class="amounts" id="amounts" hidden></div>
   </div>
+  <a class="adminLink" id="adminLink" href="/admin.html" hidden>Admin</a>
   <div class="status" id="status"><span class="dot"></span><span id="statusText">Idle</span></div>
 </header>
 <main>
@@ -233,7 +252,9 @@
         <button class="small" id="newFile" title="Write a new program yourself">New</button>
         <button class="small" id="editFile" title="Change this program yourself">Edit</button>
         <button class="small" id="saveFile" hidden>Save &amp; run</button>
-        <button class="small" id="runFile" title="Run this program on the emulator">Run</button></span></h2>
+        <button class="small" id="runFile" title="Run this program on the emulator">Run</button>
+        <button class="small" id="historyBtn" title="Earlier versions of this project's programs">History</button>
+        <button class="small" id="shareBtn" title="A link anyone can open to play this program">Share</button></span></h2>
       <div class="tabs" id="tabs"></div>
       <pre id="source"></pre>
       <textarea id="editor" spellcheck="false" hidden></textarea>
@@ -244,6 +265,32 @@
   <div class="sheet">
     <h2>Your projects <button class="small" id="closeLibrary">Close</button></h2>
     <div class="cards" id="cards"></div>
+  </div>
+</div>
+<div class="overlay" id="historySheet" hidden>
+  <div class="sheet">
+    <h2>Earlier versions <button class="small" id="closeHistory">Close</button></h2>
+    <div class="history">
+      <div class="versions" id="versions"></div>
+      <div class="version">
+        <div class="tabs" id="versionTabs"></div>
+        <pre id="versionText"></pre>
+        <div class="bar"><span id="versionNote"></span><button class="small" id="restore" hidden>Go back to this version</button></div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="overlay" id="shareSheet" hidden>
+  <div class="sheet" style="width: min(560px, 100%)">
+    <h2>Share this program <button class="small" id="closeShare">Close</button></h2>
+    <div class="notes">
+      <p id="shareText"></p>
+      <div class="note" id="shareLinkRow" hidden><span><a id="shareLink" target="_blank" rel="noopener"></a></span>
+        <button class="small" id="shareCopy">Copy</button></div>
+      <div class="note"><span></span>
+        <button class="small" id="shareStop" hidden>Stop sharing</button>
+        <button class="small primary" id="shareGo"></button></div>
+    </div>
   </div>
 </div>
 <div class="overlay" id="memory" hidden>
@@ -424,6 +471,9 @@ function update(data) {
     showEmpty();
   }
   $("projectName").textContent = data.project ? "·  " + data.project.name : "";
+  shareLink = data.project ? data.project.share : null;
+  $("adminLink").hidden = !(data.project && data.project.admin);
+  $("shareBtn").className = "small" + (shareLink ? " on" : "");
   const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
   for (const e of data.events) { addEvent(e); after = e.n + 1; }
   showLive(data.live || []);
@@ -551,6 +601,98 @@ $("projects").onclick = async () => {
     $("library").hidden = false;
   } catch (err) { tell(err); }
 };
+
+// History: a version of the programs is kept after each request and each save by hand. Picking one
+// shows its files, with the lines that differ from the current file marked; it can be put back.
+function lineDiff(old, now) {
+  const a = old.split("\n"), b = now.split("\n");
+  if (a.length * b.length > 4e6) return a.map(text => ({ text, kind: "" }));   // too big to compare: just show it
+  const best = Array.from({ length: a.length + 1 }, () => new Uint32Array(b.length + 1));
+  for (let i = a.length - 1; i >= 0; i--)
+    for (let j = b.length - 1; j >= 0; j--)
+      best[i][j] = a[i] === b[j] ? best[i + 1][j + 1] + 1 : Math.max(best[i + 1][j], best[i][j + 1]);
+  const out = [];
+  let i = 0, j = 0;
+  while (i < a.length || j < b.length) {
+    if (i < a.length && j < b.length && a[i] === b[j]) { out.push({ text: a[i], kind: "" }); i++; j++; }
+    else if (j < b.length && (i === a.length || best[i][j + 1] >= best[i + 1][j])) out.push({ text: b[j++], kind: "del" });
+    else out.push({ text: a[i++], kind: "add" });
+  }
+  return out;
+}
+async function showVersion(version, name) {
+  const tabs = $("versionTabs");
+  tabs.replaceChildren();
+  for (const f of version.files) {
+    const b = el("button", f === name ? "on" : "", f);
+    b.onclick = () => showVersion(version, f);
+    tabs.append(b);
+  }
+  for (const b of $("versions").children) b.classList.toggle("on", b.dataset.n === String(version.n));
+  const [then, now] = await Promise.all([
+    fetch(`/api/history/file?n=${version.n}&name=${encodeURIComponent(name)}`).then(r => r.ok ? r.text() : ""),
+    fetch("/api/file?name=" + encodeURIComponent(name)).then(r => r.ok ? r.text() : null),
+  ]);
+  const pre = $("versionText");
+  pre.replaceChildren();
+  const lines = now === null ? then.split("\n").map(text => ({ text, kind: "" })) : lineDiff(then, now);
+  for (const line of lines) pre.append(line.kind ? el("span", line.kind, line.text || " ") : line.text + "\n");
+  const changed = lines.filter(l => l.kind).length;
+  $("versionNote").textContent = now === null ? name + " is not in the project now"
+    : changed ? "Green: in this version.  Red: in the program now." : "Same as the program now.";
+  $("restore").hidden = false;
+  $("restore").onclick = async () => {
+    try {
+      const data = await post("/api/history/restore", { n: version.n });
+      $("historySheet").hidden = true; fileStamp = {}; filesDirty = true;
+      notice(data.changed.length ? "Went back to version " + version.n + ": " + data.changed.join(", ")
+                                 : "Nothing to change: that is the current version.");
+    } catch (err) { tell(err); }
+  };
+}
+$("historyBtn").onclick = async () => {
+  try {
+    const { versions } = await (await fetch("/api/history")).json();
+    const list = $("versions");
+    list.replaceChildren();
+    $("versionTabs").replaceChildren(); $("versionText").textContent = ""; $("restore").hidden = true;
+    $("versionNote").textContent = versions.length ? "Pick a version." : "No versions yet: one is kept after each request and each save.";
+    for (const v of versions) {
+      const b = el("button");
+      b.dataset.n = v.n;
+      b.append("Version " + v.n + "  ·  " + new Date(v.at * 1000).toLocaleString([], { dateStyle: "short", timeStyle: "short" }),
+               el("small", "", v.why));
+      b.onclick = () => showVersion(v, v.files.includes(currentFile) ? currentFile : v.files[0]);
+      list.append(b);
+    }
+    $("historySheet").hidden = false;
+  } catch (err) { tell(err); }
+};
+$("closeHistory").onclick = () => { $("historySheet").hidden = true; };
+$("historySheet").onclick = ev => { if (ev.target === $("historySheet")) $("historySheet").hidden = true; };
+
+// Sharing: a page anyone can open to play the program as it was last run, in an emulator in their browser.
+let shareLink = null;   // the path of this project's link, from the updates; null when not shared
+function showShare() {
+  const shared = !!shareLink;
+  $("shareText").textContent = shared
+    ? "Anyone with this link can play the program, without signing in. Update it after you change the program; stop sharing to take it down."
+    : "Make a link that anyone can open to play this program in their web browser, without signing in. It shares the program as it was last run, with its source. You can take it down at any time.";
+  $("shareLinkRow").hidden = !shared;
+  if (shared) { $("shareLink").href = location.origin + shareLink; $("shareLink").textContent = location.origin + shareLink; }
+  $("shareStop").hidden = !shared;
+  $("shareGo").textContent = shared ? "Update to the last run" : "Make the link";
+}
+$("shareBtn").onclick = () => { showShare(); $("shareSheet").hidden = false; };
+$("shareGo").onclick = async () => {
+  try { shareLink = (await post("/api/share")).link; showShare(); } catch (err) { tell(err); }
+};
+$("shareStop").onclick = async () => {
+  try { await post("/api/share/stop"); shareLink = null; showShare(); } catch (err) { tell(err); }
+};
+$("shareCopy").onclick = () => navigator.clipboard.writeText($("shareLink").href).then(() => notice("Link copied."), tell);
+$("closeShare").onclick = () => { $("shareSheet").hidden = true; };
+$("shareSheet").onclick = ev => { if (ev.target === $("shareSheet")) $("shareSheet").hidden = true; };
 
 // Memory: the notes the agent keeps about this person; any can be removed.
 function showNotes(notes) {

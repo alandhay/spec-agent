@@ -21,7 +21,8 @@ Cognito: sign-in (invited people only)        S3: also the code bundle and a cop
 From the project root, with the AWS CLI signed in (region us-east-1):
 
 ```
-aws cloudformation create-stack --stack-name specdev --template-body file://deploy/specdev.yaml --capabilities CAPABILITY_IAM --parameters ParameterKey=Subnet,ParameterValue=<public subnet> ParameterKey=Vpc,ParameterValue=<its vpc> ParameterKey=CloudFrontPrefixList,ParameterValue=<id of com.amazonaws.global.cloudfront.origin-facing>
+aws ssm get-parameter --name /aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id --query Parameter.Value --output text
+aws cloudformation create-stack --stack-name specdev --template-body file://deploy/specdev.yaml --capabilities CAPABILITY_IAM --parameters ParameterKey=Subnet,ParameterValue=<public subnet> ParameterKey=Vpc,ParameterValue=<its vpc> ParameterKey=CloudFrontPrefixList,ParameterValue=<id of com.amazonaws.global.cloudfront.origin-facing> ParameterKey=Image,ParameterValue=<the image id from the first line>
 aws cloudformation wait stack-create-complete --stack-name specdev
 python deploy/deploy.py
 aws cognito-idp admin-create-user --user-pool-id <UserPoolId output> --username someone@example.com
@@ -46,9 +47,27 @@ Both `deploy.py` commands start the instance first if it is off. Settings live i
 - People are kept apart by folder checks in the server and, below those, by Landlock (`specdev/sandbox.py`, switched on by `SPECDEV_SANDBOX=1`): each person's agent, assembler and emulator can read the system's files but write, and read, only their own folders, so the assembler's `INCBIN` cannot reach another person's files or the service's settings. `setup.sh` checks the kernel supports this and stops the deploy if not; with it switched on, nothing is run unconfined. `/etc/specdev.env` is readable by root only. They still share one machine, one service user and its memory and processor, so this is not a boundary against someone attacking the kernel: invite people you trust.
 - The model is Sonnet 5 because Sonnet 5.5 and Opus 5.5 are not enabled on Bedrock in this account (the call fails asking for AWS Marketplace subscribe rights). Once enabled, change `MODEL` in `deploy.py`.
 
+## The admin page
+
+`<Url>admin.html` (linked from the workbench's header for administrators) lists everyone: their address, whether they have signed in, when they were last seen, their projects, requests, spending and budget, and their recent requests. From there an administrator can **invite** someone (Cognito emails them a temporary password), **add credit**, and **suspend** or restore someone: that disables their Cognito sign-in and, because a sign-in lasts up to 24 hours, the server also refuses them straight away and stops their agent.
+
+Administrators are the sign-in addresses in `deploy/admins.txt` (one per line, not checked in), or, without that file, the MCP person; `deploy.py` passes them as `SPECDEV_ADMINS`. Inviting and suspending need the instance role's Cognito permissions, added to `specdev.yaml` with the admin page. A stack created before then needs one update. Before that change the template looked up the newest Ubuntu image on every update, which would have replaced the instance and its disk; now the image is a fixed id, and the update passes the one the instance already runs. Make a change set first and check that nothing is replaced:
+
+```
+IMAGE=$(aws ec2 describe-instances --instance-ids <InstanceId output> --query "Reservations[0].Instances[0].ImageId" --output text)
+aws cloudformation create-change-set --stack-name specdev --change-set-name admin --template-body file://deploy/specdev.yaml --capabilities CAPABILITY_IAM --parameters ParameterKey=Image,ParameterValue=$IMAGE ParameterKey=Subnet,UsePreviousValue=true ParameterKey=Vpc,UsePreviousValue=true ParameterKey=CloudFrontPrefixList,UsePreviousValue=true ParameterKey=InstanceType,UsePreviousValue=true ParameterKey=Port,UsePreviousValue=true
+aws cloudformation describe-change-set --stack-name specdev --change-set-name admin --query "Changes[].ResourceChange.[LogicalResourceId,Action,Replacement]" --output table
+aws cloudformation execute-change-set --stack-name specdev --change-set-name admin     # only if the table shows Role Modify and no replacement
+aws cloudformation wait stack-update-complete --stack-name specdev
+```
+
+## Share links
+
+Shared programs (see `specdev/PROJECTS.md`) are written to `site/play/` in the bucket and served by CloudFront like the page, so they work while the instance is off and need no sign-in. `deploy.py` puts the browser emulator they play in (JSSpeccy 3.2, GPL-3, checked against a pinned SHA-256) in `site/player/` on every deploy.
+
 ## MCP server (for Claude, ChatGPT and other assistants)
 
-`specdev/mcp.py` lets an assistant use the workbench as a tool: `list_projects`, `open_project`, `new_project`, `build` (ask the agent for a program) and `check` (progress, the screen as an image, download links). The address is `<Url>mcp/<key>`; the key is made on the first deploy and kept in `deploy/mcp-key.txt`. Everything is done as one person, on their budget, so treat the address as a password: their sign-in address goes in `deploy/mcp-person.txt` (or `$SPECDEV_MCP_PERSON`); neither file is checked in. To change the key, delete `mcp-key.txt` and deploy again; to switch the server off, delete `mcp-person.txt` and deploy.
+`specdev/mcp.py` lets an assistant use the workbench as a tool: `list_projects`, `open_project`, `new_project`, `build` (ask the agent for a program), `check` (progress, the screen as an image, download links) and `share` (a public link to play the program). The address is `<Url>mcp/<key>`; the key is made on the first deploy and kept in `deploy/mcp-key.txt`. Everything is done as one person, on their budget, so treat the address as a password: their sign-in address goes in `deploy/mcp-person.txt` (or `$SPECDEV_MCP_PERSON`); neither file is checked in. To change the key, delete `mcp-key.txt` and deploy again; to switch the server off, delete `mcp-person.txt` and deploy.
 
 It is the simplest form of MCP's HTTP transport (one JSON answer per request, no sign-in flow). `build` waits up to 40 seconds and otherwise tells the assistant to call `check`.
 

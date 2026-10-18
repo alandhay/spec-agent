@@ -30,10 +30,12 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from . import admin
 from . import bench as workbench
 from . import mcp
 from .agent import Session
 from .memory import Memory
+from .share import CONTENT_TYPES, Shares, ensure_player
 from .projects import SOURCE_TYPES, UNNAMED, Library
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -58,6 +60,13 @@ MCP_KEY = os.environ.get("SPECDEV_MCP_KEY", "")                # the assistants'
 MCP_USER = os.environ.get("SPECDEV_MCP_USER", "") or "local"  # the person assistants act as
 PUBLIC_URL = os.environ.get("SPECDEV_URL", "").rstrip("/")    # how the outside world reaches this server
 ACTIVITY = os.environ.get("SPECDEV_ACTIVITY", "")             # touched while in use; the instance stops when it goes stale
+# Who may use the admin page (sign-in addresses, comma-separated). On your own machine, you.
+ADMINS = {a.strip().lower() for a in os.environ.get("SPECDEV_ADMINS", "").split(",") if a.strip()}
+POOL_ADMIN = admin.Pool(POOL) if POOL else None
+
+SHARES = Shares(DATA / "shared", BUCKET)        # everyone's share links; hosted, served from the bucket
+SHARED_NAME = re.compile(r"[A-Za-z0-9_-]{8,40}\.(html|tap|bas|asm|inc)")
+PLAYER_NAME = re.compile(r"[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)*\.[a-z0-9.]+|COPYING")
 
 # What the agent is told about an uploaded picture, by what the person said it is.
 UPLOADS = {
@@ -72,6 +81,34 @@ UPLOADS = {
 
 class Refused(Exception):
     """Something the person asked for cannot be done; the message is for them."""
+
+
+def read_account(home: Path) -> dict:
+    try:
+        return json.loads((home / "account.json").read_text())
+    except (OSError, ValueError):
+        pass
+    try:                                # before budgets there was a tally of spending per day
+        earlier = json.loads((home / "usage.json").read_text()).values()
+    except (OSError, ValueError):
+        earlier = []
+    return {"granted": STARTING_BUDGET, "spent": round(sum(v for v in earlier if isinstance(v, (int, float))), 4)}
+
+
+def budget_of(home: Path) -> dict:
+    account = read_account(home)
+    return {**account, "remaining": round(account["granted"] - account["spent"], 4)}
+
+
+def change_account(home: Path, entry: dict, *, granted: float = 0, spent: float = 0) -> None:
+    """Add to what a person has been granted or has spent, and log why."""
+    with admin.lock_for(home):
+        account = read_account(home)
+        account["granted"] = round(account["granted"] + granted, 4)
+        account["spent"] = round(account["spent"] + spent, 4)
+        (home / "account.json").write_text(json.dumps(account))
+        with open(home / "log.jsonl", "a", encoding="utf-8") as log:
+            log.write(json.dumps(entry) + "\n")
 
 
 def in_use() -> None:
@@ -98,7 +135,7 @@ class Workspace:
         self.edited: set[str] = set()       # files changed by hand since the agent last worked
         self.active = time.time()
         self.asleep = False
-        self._usage_lock = threading.Lock()
+        self.email = ""                     # hosted: the sign-in address, from the token
         self._cpu: tuple[float, float] | None = None
         self._load_main()
 
@@ -107,32 +144,18 @@ class Workspace:
     # top-ups) less what their requests have cost. account.json holds the two totals and
     # log.jsonl every request and top-up behind them.
 
-    def _account(self) -> dict:
-        try:
-            return json.loads((self.home / "account.json").read_text())
-        except (OSError, ValueError):
-            pass
-        try:                                # before budgets there was a tally of spending per day
-            earlier = json.loads((self.home / "usage.json").read_text()).values()
-        except (OSError, ValueError):
-            earlier = []
-        return {"granted": STARTING_BUDGET, "spent": round(sum(v for v in earlier if isinstance(v, (int, float))), 4)}
-
     def _change(self, entry: dict, *, granted: float = 0, spent: float = 0) -> None:
-        with self._usage_lock:
-            account = self._account()
-            account["granted"] = round(account["granted"] + granted, 4)
-            account["spent"] = round(account["spent"] + spent, 4)
-            (self.home / "account.json").write_text(json.dumps(account))
-            with open(self.home / "log.jsonl", "a", encoding="utf-8") as log:
-                log.write(json.dumps(entry) + "\n")
+        change_account(self.home, entry, granted=granted, spent=spent)
 
     def budget(self) -> dict | None:
         """What this person has left to spend; None where there are no budgets (your own machine)."""
         if not self.hosted:
             return None
-        account = self._account()
-        return {**account, "remaining": round(account["granted"] - account["spent"], 4), "top_ups": TOP_UPS}
+        return {**budget_of(self.home), "top_ups": TOP_UPS}
+
+    @property
+    def is_admin(self) -> bool:
+        return not self.hosted or self.email.lower() in ADMINS
 
     def top_up(self, amount: float) -> None:
         # In a real service this is the moment to charge the customer, and to add the
@@ -161,6 +184,7 @@ class Workspace:
         png = self.bench.view()
         if png:
             (project.folder / "thumb.png").write_bytes(png)
+        project.keep_version("after: " + " ".join(request["request"].split())[:80])
         project.save()
         self.library.publish(project)
         if self.hosted:
@@ -232,8 +256,24 @@ class Workspace:
         self.edited.add(name)
         project = self.library.current
         project.meta["updated"] = time.time()
+        project.keep_version(f"{name} saved by hand")
         project.save()
         self.library.publish(project)
+
+    def restore(self, n: int) -> list[str]:
+        """Put an earlier version of the project's programs back; the agent is told on its next turn."""
+        if self.session.running:
+            raise Refused("The agent is working on this project. Stop it, or wait, before going back to a version.")
+        project = self.library.current
+        try:
+            changed = project.restore(n)
+        except KeyError:
+            raise Refused("That version is not kept any more.") from None
+        self.edited.update(changed)
+        project.meta["updated"] = time.time()
+        project.save()
+        self.library.publish(project)
+        return changed
 
     def run_file(self, name: str) -> str:
         if self.session.running:
@@ -246,7 +286,30 @@ class Workspace:
 
     def info(self) -> dict:
         project = self.library.current
-        return {"id": project.id, "name": project.meta["name"]}
+        shared = project.meta.get("share")
+        return {"id": project.id, "name": project.meta["name"], "share": f"/play/{shared}.html" if shared else None,
+                "admin": self.is_admin}
+
+    def share(self) -> str:
+        """Put the project's program up at a link anyone can open; return the link's path."""
+        project = self.library.current
+        main = project.meta.get("main")
+        source = self.bench.programs / main if main else None
+        tape = source.with_suffix(".tap") if source and source.suffix.lower() != ".tap" else source
+        if not tape or not tape.is_file():
+            raise Refused("Run the program first: the link shares the program as it was last run.")
+        project.meta["share"] = SHARES.publish(project.meta.get("share"), project.meta["name"], tape.read_bytes(),
+                                               source if source.suffix.lower() in SOURCE_TYPES and source.is_file() else None)
+        project.save()
+        self.library.publish(project)
+        return f"/play/{project.meta['share']}.html"
+
+    def unshare(self) -> None:
+        project = self.library.current
+        if project.meta.get("share"):
+            SHARES.withdraw(project.meta.pop("share"))
+            project.save()
+            self.library.publish(project)
 
     def files(self) -> list[dict]:
         files = [p for p in self.bench.programs.glob("*")
@@ -330,15 +393,15 @@ def _janitor() -> None:
 # -- sign-in ------------------------------------------------------------------
 
 _jwks = None
-_verified: dict[str, tuple[str, float]] = {}      # token -> (user, expiry), so the signature is checked once
+_verified: dict[str, tuple[str, float, str]] = {}  # token -> (user, expiry, address): the signature is checked once
 
 
-def user_of(token: str) -> str | None:
-    """The signed-in person a Cognito ID token belongs to, or None if it is not a good one."""
+def user_of(token: str) -> tuple[str, str] | None:
+    """The signed-in person a Cognito ID token belongs to, and their address; None if it is not a good one."""
     global _jwks
     known = _verified.get(token)
     if known:
-        return known[0] if known[1] > time.time() else None
+        return (known[0], known[2]) if known[1] > time.time() else None
     import jwt
 
     if _jwks is None:
@@ -354,8 +417,8 @@ def user_of(token: str) -> str | None:
         return None
     if len(_verified) > 1000:
         _verified.clear()
-    _verified[token] = (user, float(claims["exp"]))
-    return user
+    _verified[token] = (user, float(claims["exp"]), str(claims.get("email", "")))
+    return user, _verified[token][2]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -395,11 +458,19 @@ class Handler(BaseHTTPRequestHandler):
         if not POOL:
             return workspace("local")
         morsel = SimpleCookie(self.headers.get("Cookie", "")).get(COOKIE)
-        user = user_of(morsel.value) if morsel else None
-        if user is None:
+        signed_in = user_of(morsel.value) if morsel else None
+        if signed_in is None:
             self._json(401, {"error": "sign in"})
             return None
-        return workspace(user)
+        user, email = signed_in
+        home = DATA / user
+        if admin.suspended(home):
+            self._json(403, {"error": "Your access to the workbench has been suspended."})
+            return None
+        ws = workspace(user)
+        ws.email = email
+        admin.seen(ws.home, email)
+        return ws
 
     def _assistant(self, path: str) -> tuple[Workspace, list[str]] | None:
         """For /mcp/<key>/...: the workbench assistants use and the rest of the path; None after answering 404."""
@@ -479,6 +550,8 @@ class Handler(BaseHTTPRequestHandler):
         query = {k: v[0] for k, v in urllib.parse.parse_qs(url.query).items()}
         if url.path in ("/", "/index.html"):
             return self._send(200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
+        if url.path in ("/admin", "/admin.html"):
+            return self._send(200, (STATIC / "admin.html").read_bytes(), "text/html; charset=utf-8")
         if url.path.startswith("/mcp/"):
             found = self._assistant(url.path)
             if found is None:
@@ -495,6 +568,20 @@ class Handler(BaseHTTPRequestHandler):
             if wanted is None:
                 return self._json(405 if not rest else 404, {"error": "post JSON-RPC messages here"})
             return self._send(200, wanted[0], "application/octet-stream", download=wanted[1])
+        # Share links and the emulator they play in. Hosted these come from the bucket, not from here.
+        if url.path.startswith("/play/") and SHARED_NAME.fullmatch(url.path[6:]):
+            path = SHARES.folder / url.path[6:]
+            if path.is_file():
+                return self._send(200, path.read_bytes(), CONTENT_TYPES.get(path.suffix, "application/octet-stream"))
+            return self._json(404, {"error": "not shared"})
+        if url.path.startswith("/player/") and PLAYER_NAME.fullmatch(url.path[8:]):
+            try:
+                path = ensure_player(DATA / "player") / url.path[8:]
+            except Exception:
+                return self._json(502, {"error": "the emulator for share links could not be fetched"})
+            if path.is_file():
+                return self._send(200, path.read_bytes(), CONTENT_TYPES.get(path.suffix, "application/octet-stream"))
+            return self._json(404, {"error": "not found"})
         if url.path == "/api/config":
             return self._json(200, {"auth": {"domain": AUTH_DOMAIN, "client": CLIENT, "cookie": COOKIE} if POOL else None})
         ws = self._workspace()
@@ -503,6 +590,22 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if url.path == "/api/events.stream":
                 return self._stream(event_frames(ws, int(query.get("generation", 0)), int(query.get("after", 0))))
+            if url.path.startswith("/api/admin/"):
+                if not ws.is_admin:
+                    return self._json(403, {"error": "This is for the workbench's administrators."})
+                if url.path == "/api/admin/people":
+                    return self._json(200, {"people": admin.people(DATA, POOL_ADMIN, budget_of if POOL else lambda h: None),
+                                            "you": ws.home.name, "hosted": bool(POOL), "grants": [5, 10, 20, 50]})
+                if url.path == "/api/admin/log":
+                    home = DATA / query.get("id", "")
+                    if admin.PERSON_ID.fullmatch(home.name) and home.is_dir():
+                        return self._json(200, {"log": admin.log_tail(home)})
+            if url.path == "/api/history":
+                return self._json(200, {"versions": ws.library.current.versions()[::-1]})
+            if url.path == "/api/history/file":
+                data = ws.library.current.version_file(int(query.get("n", 0)), query.get("name", ""))
+                if data is not None:
+                    return self._send(200, data, "text/plain; charset=utf-8")
             if url.path == "/api/memory":
                 return self._json(200, {"notes": ws.memory.notes()})
             if url.path == "/api/events":
@@ -537,6 +640,49 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, workbench.BenchError):
             return self._json(400, {"error": "bad request"})
         self._json(404, {"error": "not found"})
+
+    @staticmethod
+    def _admin(ws: Workspace, path: str, body: dict) -> dict:
+        """The admin page's changes: invite someone, grant credit, suspend or restore someone."""
+        if not ws.is_admin:
+            raise Refused("This is for the workbench's administrators.")
+        if path == "/api/admin/invite":
+            email = str(body.get("email", "")).strip()
+            if not admin.EMAIL.fullmatch(email):
+                raise Refused("That does not look like an email address.")
+            if POOL_ADMIN is None:
+                raise Refused("Inviting people needs the hosted workbench.")
+            try:
+                POOL_ADMIN.invite(email)
+            except Exception as exc:
+                raise Refused(f"Cognito did not accept that: {getattr(exc, 'response', {}).get('Error', {}).get('Message') or exc}") from None
+            return {"invited": email}
+        user = str(body.get("id", ""))
+        home = DATA / user
+        if not admin.PERSON_ID.fullmatch(user):
+            raise Refused("Who?")
+        if path == "/api/admin/grant":
+            amount = body.get("amount")
+            if not isinstance(amount, (int, float)) or not 0 < amount <= admin.MAX_GRANT:
+                raise Refused(f"Grant between $0 and ${admin.MAX_GRANT:.0f}.")
+            if not POOL:
+                raise Refused("There are no budgets on your own machine.")
+            home.mkdir(parents=True, exist_ok=True)
+            change_account(home, {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "grant": amount,
+                                  "by": ws.email}, granted=amount)
+            return {"account": budget_of(home)}
+        if path == "/api/admin/suspend":
+            on = bool(body.get("suspended"))
+            if user == ws.home.name and on:
+                raise Refused("You cannot suspend yourself.")
+            if POOL_ADMIN is not None:
+                POOL_ADMIN.enable(user, not on)
+            home.mkdir(parents=True, exist_ok=True)
+            admin.update_person(home, suspended=on)
+            if on and user in WORKSPACES:
+                WORKSPACES[user].session.stop()
+            return {"suspended": on}
+        raise Refused("Unknown request.")
 
     def do_POST(self) -> None:
         path = urllib.parse.urlsplit(self.path).path
@@ -581,6 +727,16 @@ class Handler(BaseHTTPRequestHandler):
                 if not text and not image:
                     raise Refused("Say what you want built.")
                 ws.say(text, image if isinstance(image, dict) else None, str(body.get("kind", "")))
+            elif path.startswith("/api/admin/"):
+                reply.update(self._admin(ws, path, body))
+            elif path == "/api/share":
+                reply["link"] = ws.share()
+            elif path == "/api/share/stop":
+                ws.unshare()
+            elif path == "/api/history/restore":
+                if not isinstance(body.get("n"), int):
+                    raise Refused("Which version?")
+                reply["changed"] = ws.restore(body["n"])
             elif path == "/api/memory/forget":
                 number = body.get("number")
                 if not isinstance(number, int) or not 1 <= number <= len(ws.memory.notes()):

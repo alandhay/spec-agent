@@ -17,6 +17,7 @@ from pathlib import Path
 
 SOURCE_TYPES = (".bas", ".asm", ".inc")
 UNNAMED = "New project"
+MAX_VERSIONS = 50                  # versions kept per project; the oldest go first
 
 
 class Project:
@@ -58,6 +59,72 @@ class Project:
         with self._lock, open(self.folder / "chat.jsonl", "a", encoding="utf-8") as chat:
             chat.write(json.dumps(event) + "\n")
 
+    # -- history ------------------------------------------------------------
+    # A version is a copy of the project's source files, kept in history/<n>/ with a line in
+    # history.jsonl saying when and why. One is kept after each request to the agent and each
+    # hand-made save, and before a restore, so a restore can itself be undone.
+
+    def _sources(self) -> dict[str, bytes]:
+        return {p.name: p.read_bytes() for p in sorted(self.programs.glob("*"))
+                if p.is_file() and p.suffix.lower() in SOURCE_TYPES}
+
+    def versions(self) -> list[dict]:
+        """The versions kept, oldest first: {"n", "at", "why", "files"}."""
+        try:
+            lines = (self.folder / "history.jsonl").read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return []
+        out = []
+        for line in lines:
+            try:
+                version = json.loads(line)
+            except ValueError:
+                continue
+            if (self.folder / "history" / str(version["n"])).is_dir():
+                out.append(version)
+        return out
+
+    def keep_version(self, why: str) -> dict | None:
+        """Copy the source files as a new version, unless they are the same as the last one kept."""
+        with self._lock:
+            files = self._sources()
+            versions = self.versions()
+            if not files or (versions and self._version_files(versions[-1]["n"]) == files):
+                return None
+            n = versions[-1]["n"] + 1 if versions else 1
+            folder = self.folder / "history" / str(n)
+            folder.mkdir(parents=True, exist_ok=True)
+            for name, data in files.items():
+                (folder / name).write_bytes(data)
+            version = {"n": n, "at": time.time(), "why": why, "files": sorted(files)}
+            kept = [*versions, version][-MAX_VERSIONS:]
+            for gone in versions[: len(versions) + 1 - len(kept)]:
+                shutil.rmtree(self.folder / "history" / str(gone["n"]), ignore_errors=True)
+            (self.folder / "history.jsonl").write_text("".join(json.dumps(v) + "\n" for v in kept), encoding="utf-8")
+            return version
+
+    def _version_files(self, n: int) -> dict[str, bytes]:
+        folder = self.folder / "history" / str(int(n))
+        return {p.name: p.read_bytes() for p in sorted(folder.glob("*")) if p.is_file()} if folder.is_dir() else {}
+
+    def version_file(self, n: int, name: str) -> bytes | None:
+        return self._version_files(n).get(name)
+
+    def restore(self, n: int) -> list[str]:
+        """Put version ``n``'s source files back (after keeping the current ones); return the names changed."""
+        wanted = self._version_files(n)
+        if not wanted:
+            raise KeyError(n)
+        self.keep_version(f"before going back to version {n}")
+        current = self._sources()
+        with self._lock:
+            for name in current.keys() - wanted.keys():
+                (self.programs / name).unlink(missing_ok=True)
+            for name, data in wanted.items():
+                if current.get(name) != data:
+                    (self.programs / name).write_bytes(data)
+        return sorted(name for name in current.keys() | wanted.keys() if current.get(name) != wanted.get(name))
+
     def summary(self) -> dict:
         files = sorted(p.name for p in self.programs.glob("*") if p.suffix.lower() in SOURCE_TYPES)
         return {"id": self.id, "name": self.meta["name"], "updated": self.meta["updated"], "files": files,
@@ -71,6 +138,7 @@ class Library:
         self.root.mkdir(parents=True, exist_ok=True)
         self._s3 = None
         self._publishing = threading.Lock()
+        self._sent: dict[str, tuple[float, int]] = {}     # key -> (mtime, size) of what is in S3
         if not any(self.root.iterdir()):
             self._fetch()
         self.projects = {p.name: Project(p) for p in sorted(self.root.iterdir()) if p.is_dir()}
@@ -131,7 +199,10 @@ class Library:
                 for path in project.folder.rglob("*"):
                     if path.is_file():
                         key = f"{self.prefix}/{project.id}/{path.relative_to(project.folder).as_posix()}"
-                        s3.upload_file(str(path), self.bucket, key)
+                        stat = path.stat()
+                        if self._sent.get(key) != (stat.st_mtime, stat.st_size):
+                            s3.upload_file(str(path), self.bucket, key)
+                            self._sent[key] = (stat.st_mtime, stat.st_size)
             except Exception as exc:
                 print(f"library: could not publish {project.id}: {exc}", file=sys.stderr, flush=True)
 
