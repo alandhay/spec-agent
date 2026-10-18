@@ -23,6 +23,7 @@ import json
 import os
 import queue
 import re
+import sys
 import threading
 import time
 import urllib.parse
@@ -30,7 +31,7 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import admin
+from . import admin, payments
 from . import bench as workbench
 from . import mcp
 from .agent import Session
@@ -60,6 +61,11 @@ MCP_KEY = os.environ.get("SPECDEV_MCP_KEY", "")                # the assistants'
 MCP_USER = os.environ.get("SPECDEV_MCP_USER", "") or "local"  # the person assistants act as
 PUBLIC_URL = os.environ.get("SPECDEV_URL", "").rstrip("/")    # how the outside world reaches this server
 ACTIVITY = os.environ.get("SPECDEV_ACTIVITY", "")             # touched while in use; the instance stops when it goes stale
+# Budgets: hosted always; on your own machine only when asked for (to try payments with Stripe's test mode).
+BUDGETS = bool(POOL) or os.environ.get("SPECDEV_BUDGETS", "") == "1"
+# Real top-ups through Stripe Checkout (specdev/payments.py), when both keys are set; else a top-up is just granted.
+STRIPE = (payments.Stripe(os.environ["SPECDEV_STRIPE_SECRET_KEY"], os.environ["SPECDEV_STRIPE_WEBHOOK_SECRET"])
+          if os.environ.get("SPECDEV_STRIPE_SECRET_KEY") and os.environ.get("SPECDEV_STRIPE_WEBHOOK_SECRET") else None)
 # Who may use the admin page (sign-in addresses, comma-separated). On your own machine, you.
 ADMINS = {a.strip().lower() for a in os.environ.get("SPECDEV_ADMINS", "").split(",") if a.strip()}
 POOL_ADMIN = admin.Pool(POOL) if POOL else None
@@ -112,6 +118,25 @@ def change_account(home: Path, entry: dict, *, granted: float = 0, spent: float 
             log.write(json.dumps(entry) + "\n")
 
 
+def credit(user: str, dollars: float, session_id: str) -> bool:
+    """Add a payment's credit to a person's budget, once per Checkout Session; True if it was added now."""
+    if not admin.PERSON_ID.fullmatch(user):
+        raise payments.PaymentError(f"a payment for an unknown person: {user!r}")
+    home = DATA / user
+    home.mkdir(parents=True, exist_ok=True)
+    with admin.lock_for(home):
+        try:
+            done = set(json.loads((home / "payments.json").read_text()))
+        except (OSError, ValueError):
+            done = set()
+        if session_id in done:
+            return False                    # Stripe sends an event again until it hears back: count it once
+        change_account(home, {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "payment": dollars,
+                              "stripe_session": session_id}, granted=dollars)
+        (home / "payments.json").write_text(json.dumps(sorted(done | {session_id})))
+    return True
+
+
 def in_use() -> None:
     if ACTIVITY:
         try:
@@ -151,18 +176,28 @@ class Workspace:
 
     def budget(self) -> dict | None:
         """What this person has left to spend; None where there are no budgets (your own machine)."""
-        if not self.hosted:
+        if not BUDGETS:
             return None
-        return {**budget_of(self.home), "top_ups": TOP_UPS}
+        return {**budget_of(self.home), "top_ups": TOP_UPS, "payments": "stripe-test" if STRIPE and STRIPE.test_mode
+                else "stripe" if STRIPE else None}
 
     @property
     def is_admin(self) -> bool:
         return not self.hosted or self.email.lower() in ADMINS
 
-    def top_up(self, amount: float) -> None:
-        # In a real service this is the moment to charge the customer, and to add the
-        # amount only once the payment has gone through. Here it is simply granted.
-        self._change({"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "top_up": amount}, granted=amount)
+    def top_up(self, amount: float, origin: str) -> dict:
+        """With Stripe: a payment page to send the person to ({"checkout": url}); the credit comes later,
+        from Stripe's webhook (see credit()). Without: the amount is simply granted ({"budget": ...})."""
+        if STRIPE is None:
+            self._change({"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "top_up": amount}, granted=amount)
+            return {"budget": self.budget()}
+        try:
+            url = STRIPE.checkout(self.home.name, self.email, amount, success_url=f"{origin}/?paid={{CHECKOUT_SESSION_ID}}",
+                                  cancel_url=f"{origin}/?paid=cancelled")
+        except payments.PaymentError as exc:
+            print(f"payments: {exc}", file=sys.stderr, flush=True)
+            raise Refused("Payments are not working just now. Try again in a few minutes.") from None
+        return {"checkout": url}
 
     def _gate(self) -> str | None:
         budget = self.budget()
@@ -208,7 +243,7 @@ class Workspace:
         project.keep_version("after: " + " ".join(request["request"].split())[:80])
         project.save()
         self.library.publish(project)
-        if self.hosted:
+        if BUDGETS:
             self._change({**request, "project": project.id}, spent=request["cost"])
 
     def _load_main(self) -> None:
@@ -710,6 +745,22 @@ class Handler(BaseHTTPRequestHandler):
             return {"suspended": on}
         raise Refused("Unknown request.")
 
+    def _stripe_webhook(self, raw: bytes) -> None:
+        if STRIPE is None:
+            return self._json(404, {"error": "not found"})
+        try:
+            event = STRIPE.verify(raw, self.headers.get("Stripe-Signature", ""))
+            paid = payments.credit_from(event)
+            if paid:
+                user, dollars, session_id = paid
+                added = credit(user, dollars, session_id)
+                print(f"payments: {session_id} for {user}: ${dollars:.2f} {'added' if added else 'already added'}",
+                      file=sys.stderr, flush=True)
+        except payments.PaymentError as exc:
+            print(f"payments: refused a webhook: {exc}", file=sys.stderr, flush=True)
+            return self._json(400, {"error": str(exc)})
+        self._json(200, {"received": True})
+
     def do_POST(self) -> None:
         path = urllib.parse.urlsplit(self.path).path
         length = int(self.headers.get("Content-Length") or 0)
@@ -721,6 +772,8 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
             return self._json(400, {"error": "too much to send at once"})
         raw = self.rfile.read(length)
+        if path == "/api/stripe/webhook":       # from Stripe, not the page: trusted only by its signature
+            return self._stripe_webhook(raw)
         if path.startswith("/mcp/"):
             found = self._assistant(path)
             if found is None:
@@ -789,10 +842,10 @@ class Handler(BaseHTTPRequestHandler):
                     raise Refused("Which keys?")
                 ws.bench.keys([str(key) for key in keys], bool(body.get("down")))
             elif path == "/api/topup":
-                if not ws.hosted or body.get("amount") not in TOP_UPS:
+                if not BUDGETS or body.get("amount") not in TOP_UPS:
                     raise Refused("That amount cannot be added.")
-                ws.top_up(body["amount"])
-                reply["budget"] = ws.budget()
+                origin = PUBLIC_URL or self.headers.get("Origin", "") or f"http://{self.headers.get('Host', '')}"
+                reply.update(ws.top_up(body["amount"], origin.rstrip("/")))
             else:
                 return self._json(404, {"error": "not found"})
         except (Refused, workbench.BenchError) as exc:

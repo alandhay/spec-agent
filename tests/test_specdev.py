@@ -476,3 +476,63 @@ def test_debugger_script_and_report():
     assert debugger.report(hex(m + 1) + "\n0x800a\n1\n0x0", layout, LABELS).endswith("Not hit: #2, #3.")
     with pytest.raises(debugger.DebugError):
         debugger.script([], LABELS)
+
+
+# -- payments -------------------------------------------------------------------------------
+
+import hashlib  # noqa: E402
+import hmac  # noqa: E402
+
+from specdev import payments  # noqa: E402
+
+
+def signed(payload: bytes, secret: str, stamp: int) -> str:
+    return f"t={stamp},v1=" + hmac.new(secret.encode(), f"{stamp}.".encode() + payload, hashlib.sha256).hexdigest()
+
+
+def test_stripe_checkout_asks_for_the_right_payment():
+    sent = []
+    stripe = payments.Stripe("sk_test_x", "whsec_y", send=lambda path, fields: sent.append((path, fields)) or {"url": "https://checkout.stripe.com/c/1"})
+    url = stripe.checkout(ALICE, "alice@example.com", 10, "https://site/?paid={CHECKOUT_SESSION_ID}", "https://site/?paid=cancelled")
+    assert url == "https://checkout.stripe.com/c/1" and stripe.test_mode
+    path, fields = sent[0]
+    assert path == "/checkout/sessions" and fields["mode"] == "payment"
+    assert fields["line_items[0][price_data][unit_amount]"] == "1000" and fields["metadata[credit_cents]"] == "1000"
+    assert fields["client_reference_id"] == ALICE == fields["metadata[user]"] and fields["customer_email"] == "alice@example.com"
+    with pytest.raises(payments.PaymentError):
+        payments.Stripe("sk_test_x", "whsec_y", send=lambda p, f: {}).checkout(ALICE, "", 5, "a", "b")
+
+
+def test_stripe_webhooks_are_trusted_only_when_signed():
+    stripe = payments.Stripe("sk_test_x", "whsec_y")
+    body = json.dumps({"type": "checkout.session.completed"}).encode()
+    now = 1_800_000_000
+    assert stripe.verify(body, signed(body, "whsec_y", now), now=now)["type"] == "checkout.session.completed"
+    for header in (signed(body, "wrong", now), signed(body + b" ", "whsec_y", now)[:0] + signed(b"other", "whsec_y", now), "", "v1=abc"):
+        with pytest.raises(payments.PaymentError):
+            stripe.verify(body, header, now=now)
+    with pytest.raises(payments.PaymentError):                         # replayed long after
+        stripe.verify(body, signed(body, "whsec_y", now), now=now + 3600)
+
+
+def test_only_paid_sessions_give_credit():
+    def event(**session):
+        return {"type": "checkout.session.completed",
+                "data": {"object": {"id": "cs_1", "payment_status": "paid", "amount_total": 1180,
+                                    "metadata": {"user": ALICE, "credit_cents": "1000"}, **session}}}
+    assert payments.credit_from(event()) == (ALICE, 10.0, "cs_1")        # the credit sold, not the total with tax
+    assert payments.credit_from(event(payment_status="unpaid")) is None
+    assert payments.credit_from(event(metadata={})) is None
+    assert payments.credit_from({"type": "payment_intent.created"}) is None
+
+
+def test_a_payment_is_credited_once(tmp_path, monkeypatch):
+    from specdev import server
+
+    monkeypatch.setattr(server, "DATA", tmp_path)
+    assert server.credit(ALICE, 10.0, "cs_1") is True
+    assert server.credit(ALICE, 10.0, "cs_1") is False                 # Stripe sent it again
+    assert server.budget_of(tmp_path / ALICE)["granted"] == server.STARTING_BUDGET + 10
+    assert admin.log_tail(tmp_path / ALICE)[0]["stripe_session"] == "cs_1"
+    with pytest.raises(payments.PaymentError):
+        server.credit("../etc", 10.0, "cs_2")

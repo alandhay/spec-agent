@@ -22,14 +22,14 @@ EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 MAX_GRANT = 1000.0
 SEEN_EVERY_S = 300                      # how often "last seen" is written while someone is active
 
-_locks: dict[str, threading.Lock] = {}
+_locks: dict[str, threading.RLock] = {}
 _locks_lock = threading.Lock()
 
 
-def lock_for(home: Path) -> threading.Lock:
+def lock_for(home: Path) -> threading.RLock:
     """One lock per person's folder, shared by everything that changes their account or record."""
     with _locks_lock:
-        return _locks.setdefault(str(home), threading.Lock())
+        return _locks.setdefault(str(home), threading.RLock())
 
 
 def _read(path: Path, default):

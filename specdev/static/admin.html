@@ -123,7 +123,8 @@ function row(p) {
       const { log } = await (await fetch("/api/admin/log?id=" + encodeURIComponent(p.id))).json();
       const lines = log.map(e => e.request !== undefined
         ? `${e.at}  $${(e.cost || 0).toFixed(3)}  ${e.seconds}s  ${e.failed ? "FAILED  " : ""}${e.request}`
-        : `${e.at}  ${e.grant !== undefined ? "granted $" + e.grant + (e.by ? " by " + e.by : "") : "topped up $" + e.top_up}`);
+        : `${e.at}  ${e.grant !== undefined ? "granted $" + e.grant + (e.by ? " by " + e.by : "")
+              : e.payment !== undefined ? "paid $" + e.payment.toFixed(2) + " by card (Stripe " + e.stripe_session + ")" : "topped up $" + e.top_up}`);
       logCell.replaceChildren(el("pre", "", lines.length ? lines.join("\n") : "Nothing yet."));
       logRow.hidden = false;
     } catch (err) { notice(err.message); }

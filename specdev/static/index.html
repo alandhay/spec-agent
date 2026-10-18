@@ -255,6 +255,8 @@
   .note small { color: var(--muted); font-size: 12px; white-space: nowrap; }
   .notice { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 30; max-width: min(640px, 90vw);
     background: #3a1d1b; border: 1px solid var(--bad); color: var(--text); padding: 9px 16px; border-radius: 8px; font-size: 14px; cursor: pointer; }
+  .notice.good { background: #1d3a24; border-color: #2b5c3f; }
+  .amounts .how { font-size: 11.5px; color: var(--muted); align-self: center; padding: 0 4px; white-space: normal; max-width: 220px; }
 
   @media (max-width: 1100px) {
     .content { grid-template-columns: minmax(320px, var(--chat, 400px)) 12px minmax(0, 1fr); }
@@ -488,8 +490,8 @@ async function post(path, body) {
   return data;
 }
 // Problems are shown in a strip at the top of the page, which goes away by itself or when clicked.
-function notice(text) {
-  const strip = el("div", "notice", text);
+function notice(text, good) {
+  const strip = el("div", "notice" + (good ? " good" : ""), text);
   strip.onclick = () => strip.remove();
   document.body.append(strip);
   setTimeout(() => strip.remove(), 8000);
@@ -888,10 +890,17 @@ function showBudget(budget) {
       b.onclick = async ev => {
         ev.stopPropagation();
         amounts.hidden = true;
-        try { showBudget((await post("/api/topup", { amount })).budget); } catch (err) { tell(err); }
+        try {
+          const data = await post("/api/topup", { amount });
+          if (data.checkout) location.href = data.checkout;   // Stripe's payment page; it sends you back here
+          else showBudget(data.budget);
+        } catch (err) { tell(err); }
       };
       amounts.append(b);
     }
+    if (budget.payments) amounts.append(el("span", "how", budget.payments === "stripe-test"
+      ? "Card payment by Stripe, test mode: pay with 4242 4242 4242 4242, any future date, any CVC."
+      : "Card payment by Stripe."));
   }
 }
 $("budget").onclick = ev => { ev.stopPropagation(); $("amounts").hidden = !$("amounts").hidden; };
@@ -1429,6 +1438,13 @@ async function start() {
     } catch (err) { await toSignIn(); }
   }
   if (auth) await awake();
+  // Back from Stripe's payment page. The credit arrives separately (Stripe tells the server), so the budget may take a moment.
+  const paid = new URLSearchParams(location.search).get("paid");
+  if (paid) {
+    history.replaceState(null, "", "/");
+    if (paid === "cancelled") notice("Payment cancelled: nothing was charged.");
+    else notice("Thank you: the payment went through. Your budget goes up as soon as Stripe confirms it, usually within seconds.", true);
+  }
   showEmpty();
   follow(); screen(); loadRail();
 }

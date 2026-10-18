@@ -30,6 +30,24 @@ MCP_PERSON_FILE = ROOT / "deploy" / "mcp-person.txt"   # kept out of the reposit
 # file above ("" = no MCP server).
 MCP_PERSON = os.environ.get("SPECDEV_MCP_PERSON") or (MCP_PERSON_FILE.read_text().strip() if MCP_PERSON_FILE.is_file() else "")
 MCP_KEY_FILE = ROOT / "deploy" / "mcp-key.txt"     # the access key in the MCP address; made on first deploy
+# Card payments (specdev/payments.py): SPECDEV_STRIPE_SECRET_KEY=... and SPECDEV_STRIPE_WEBHOOK_SECRET=... lines,
+# kept out of the repository. Without the file a top-up is simply granted, as before.
+STRIPE_FILE = ROOT / "deploy" / "stripe.env"
+
+
+def stripe_settings() -> list[str]:
+    if not STRIPE_FILE.is_file():
+        return []
+    wanted = ("SPECDEV_STRIPE_SECRET_KEY", "SPECDEV_STRIPE_WEBHOOK_SECRET")
+    found = dict(line.strip().split("=", 1) for line in STRIPE_FILE.read_text().splitlines() if "=" in line)
+    missing = [k for k in wanted if not found.get(k)]
+    if missing:
+        sys.exit(f"{STRIPE_FILE} needs {', '.join(missing)}")
+    if found["SPECDEV_STRIPE_SECRET_KEY"].startswith("sk_live_"):
+        print("NOTE: a live Stripe key: top-ups will charge real cards.")
+    return [f"{k}={found[k]}" for k in wanted]
+
+
 # Who may use the admin page: sign-in addresses, one per line, kept out of the repository; else the MCP person.
 ADMINS_FILE = ROOT / "deploy" / "admins.txt"
 ADMINS = (ADMINS_FILE.read_text().split() if ADMINS_FILE.is_file() else []) or ([MCP_PERSON] if MCP_PERSON else [])
@@ -173,6 +191,7 @@ def main() -> int:
         "DISABLE_AUTOUPDATER=1",
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
         *mcp_settings(out),
+        *stripe_settings(),
     ])
     status = run(instance, [
         "set -e",
