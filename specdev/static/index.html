@@ -4,298 +4,433 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SpecDev</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
 <style>
+  /* The workbench (design: SpecDev Workbench Spec, direction 2a). A project rail, a top bar, and three panes:
+     the agent, the Spectrum (with the runs of this session under it) and the program. */
   :root {
-    --bg: #101114; --panel: #191b20; --panel-2: #20232a; --line: #2c3038;
-    --text: #e8e9ec; --dim: #9aa0aa; --accent: #ffd400; --good: #3ddc84; --bad: #ff5a52; --work: #4cc9ff;
-    --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    --bg: #111214; --rail: #0e0f11; --panel: #18191d; --raised: #1f2126; --chip: #23252b;
+    --line: #26282e; --line-2: #2a2d34; --box: #30333b;
+    --text: #e9e8e4; --text-2: #d9d8d4; --dim: #b9bac0; --muted: #8e9099; --faint: #6f727b; --bubble: #262a33;
+    --accent: #ffd400; --good: #3ddc84; --bad: #ff5a52; --bad-text: #ff7d76; --work: #4cc9ff; --string: #8fd694;
+    --zx-green: #00d800; --zx-red: #d80000; --zx-cyan: #00d8d8; --zx-yellow: #d8d800; --zx-magenta: #d800d8;
+    --sans: Geist, system-ui, "Segoe UI", sans-serif; --mono: "Geist Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+    --grotesk: "Space Grotesk", var(--sans);
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
-  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, "Segoe UI", sans-serif;
-    display: grid; grid-template-rows: auto minmax(0, 1fr); }
-  header { padding: 12px 20px 10px; border-bottom: 1px solid var(--line); position: relative;
-    display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
-  header::after { content: ""; position: absolute; left: 0; right: 0; bottom: -4px; height: 4px;
-    background: linear-gradient(90deg, #d80000 0 25%, #d8d800 25% 50%, #00d800 50% 75%, #00d8d8 75%); }
-  h1 { margin: 0; font-size: 20px; letter-spacing: .5px; }
-  header p { margin: 0; color: var(--dim); font-size: 13px; flex: 1; min-width: 200px; }
-  .status { font-size: 13px; color: var(--dim); display: flex; align-items: center; gap: 8px; }
-  .status .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--line); }
-  .status.working .dot { background: var(--work); animation: pulse 1s ease-in-out infinite; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 var(--sans);
+    display: grid; grid-template-columns: 64px minmax(0, 1fr); }
+  [hidden] { display: none !important; }
   @keyframes pulse { 50% { opacity: .3; } }
-  .budget { font-size: 13px; color: var(--dim); display: flex; align-items: center; gap: 8px; position: relative; }
-  .budget b { color: var(--text); font-variant-numeric: tabular-nums; }
-  .budget.low b { color: var(--accent); }
-  .budget.out b { color: var(--bad); }
-  .budget .meter { width: 70px; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+
+  /* buttons: one primary per pane, then bordered, then text only */
+  button { font: inherit; font-size: 12.5px; cursor: pointer; color: var(--text); background: transparent;
+    border: 1px solid var(--line-2); border-radius: 7px; padding: 5px 12px; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #111; font-weight: 600; }
+  button.text { border-color: transparent; color: var(--dim); padding: 5px 8px; }
+  button.text:hover { color: var(--text); }
+  button:disabled { opacity: .45; cursor: default; }
+  button:focus-visible, a:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  a { color: var(--dim); }
+
+  /* 1 · the project rail */
+  .rail { background: var(--rail); border-right: 1px solid var(--line); display: flex; flex-direction: column;
+    align-items: center; gap: 12px; padding: 16px 0; min-height: 0; overflow: hidden; }
+  .logo { display: flex; transform: skewX(-20deg); margin-bottom: 10px; flex: none; }
+  .logo i { width: 5px; height: 22px; }
+  .projectsRail { display: flex; flex-direction: column; align-items: center; gap: 12px; overflow-y: auto; padding: 3px 0; min-height: 0; }
+  .thumb { width: 40px; height: 30px; border-radius: 5px; padding: 0; border: 0; background: #000; overflow: hidden; flex: none;
+    opacity: .7; display: grid; place-items: center; font: 500 8px/1 var(--mono); color: var(--zx-yellow); text-transform: uppercase; }
+  .thumb:hover { opacity: 1; }
+  .thumb.current { opacity: 1; outline: 2px solid var(--accent); outline-offset: 2px; }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; image-rendering: pixelated; display: block; }
+  .newProject { width: 40px; height: 30px; border-radius: 5px; border: 1px dashed #3a3c42; color: var(--muted); padding: 0; flex: none; }
+  .rail .spacer { flex: 1; }
+  .rail .small { font-size: 10px; color: var(--muted); border: 0; padding: 0; background: none; }
+  .rail .small:hover { color: var(--text); }
+  .avatar { width: 30px; height: 30px; border-radius: 50%; background: #2c3038; border: 0; padding: 0; flex: none;
+    font: 600 11px/30px var(--sans); color: var(--text); text-align: center; }
+  .menu { position: fixed; z-index: 15; background: var(--raised); border: 1px solid var(--line-2); border-radius: 8px;
+    padding: 6px; display: flex; flex-direction: column; min-width: 180px; }
+  .menu .who { color: var(--muted); font-size: 12px; padding: 4px 8px 6px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+  .menu a, .menu button { text-align: left; border: 0; padding: 6px 8px; border-radius: 5px; color: var(--text); text-decoration: none; font-size: 13px; }
+  .menu a:hover, .menu button:hover { background: var(--chip); }
+
+  /* the top bar and the panes */
+  .app { display: grid; grid-template-rows: 52px minmax(0, 1fr); min-width: 0; min-height: 0; }
+  .top { display: flex; align-items: center; gap: 14px; padding: 0 16px; border-bottom: 1px solid var(--line); min-width: 0; }
+  .title { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+  #projectName { font: 600 15px var(--sans); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: text; border-radius: 4px; }
+  #projectName:hover { background: var(--raised); }
+  #projectRename { font: 600 15px var(--sans); background: var(--raised); color: var(--text); border: 1px solid var(--accent); border-radius: 5px; padding: 2px 6px; width: 28ch; }
+  #projectSub { font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+  .top .grow { flex: 1; }
+  .pill { display: flex; align-items: center; gap: 8px; padding: 5px 12px 5px 10px; border-radius: 999px; font-size: 13px; font-weight: 500;
+    background: #1f2126; color: #b9bac0; white-space: nowrap; }
+  .pill .dot { width: 8px; height: 8px; border-radius: 50%; background: #3a3d45; flex: none; }
+  .pill.working { background: rgba(76, 201, 255, .1); color: var(--work); }
+  .pill.working .dot { background: var(--work); animation: pulse 1s ease-in-out infinite; }
+  .pill.asleep .dot { background: transparent; border: 1.5px solid #6f727b; }
+  .pill.unreachable { background: rgba(255, 90, 82, .12); color: var(--bad-text); }
+  .pill.unreachable .dot { background: var(--bad); }
+  .budget { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); position: relative; cursor: pointer; }
+  .budget .meter { width: 64px; height: 5px; border-radius: 3px; background: #2a2d34; overflow: hidden; }
   .budget .meter i { display: block; height: 100%; background: var(--good); transition: width .4s; }
   .budget.low .meter i { background: var(--accent); }
   .budget.out .meter i { background: var(--bad); }
-  .budget .amounts { position: absolute; top: calc(100% + 8px); right: 0; z-index: 5; background: var(--panel-2);
-    border: 1px solid var(--line); border-radius: 8px; padding: 8px; display: flex; gap: 6px; white-space: nowrap;
-    box-shadow: 0 6px 20px #0008; }
-  .budget[hidden], .budget .amounts[hidden] { display: none; }
-  .adminLink { color: var(--dim); font-size: 13px; }
-  .adminLink[hidden] { display: none; }
+  .budget b { color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; }
+  .budget.out b { color: var(--bad-text); }
+  .amounts { position: absolute; top: calc(100% + 8px); right: 0; z-index: 5; background: var(--raised); border: 1px solid var(--line-2);
+    border-radius: 8px; padding: 8px; display: flex; gap: 6px; white-space: nowrap; }
+  #shareBtn { display: flex; align-items: center; gap: 7px; }
+  #shareBtn .live { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
 
-  /* Three panes with two draggable dividers: chat | (Spectrum over Program). */
-  main { padding: 16px; display: grid; min-height: 0;
-    grid-template-columns: minmax(260px, var(--chat, 50%)) 16px minmax(260px, 1fr); }
-  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; min-height: 0;
-    display: flex; flex-direction: column; overflow: hidden; }
-  .panel > h2 { margin: 0; padding: 9px 14px; font-size: 12px; text-transform: uppercase; letter-spacing: .8px;
-    color: var(--dim); border-bottom: 1px solid var(--line); display: flex; justify-content: space-between;
-    align-items: center; gap: 10px; }
-  .right { display: grid; min-height: 0; grid-template-rows: minmax(120px, var(--tv, 55%)) 16px minmax(90px, 1fr); }
+  .content { display: grid; padding: 12px; min-height: 0; min-width: 0;
+    grid-template-columns: minmax(360px, var(--chat, 470px)) 12px minmax(0, 1fr); }
+  .right { display: grid; min-height: 0; min-width: 0; grid-template-rows: minmax(160px, var(--tv, 57.4%)) 12px minmax(120px, 1fr); }
+  .pane { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; min-height: 0; min-width: 0;
+    display: flex; flex-direction: column; }
+  .paneHead { height: 44px; flex: none; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 10px; padding: 0 12px 0 16px; min-width: 0; }
+  .paneHead .name { font-weight: 500; white-space: nowrap; }
+  .paneHead .sub { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .paneHead .grow { flex: 1; }
   .split { position: relative; touch-action: none; }
   .split.x { cursor: col-resize; }
   .split.y { cursor: row-resize; }
-  .split::after { content: ""; position: absolute; border-radius: 2px; background: var(--line); transition: background .15s; }
-  .split.x::after { top: calc(50% - 22px); height: 44px; left: 6px; width: 4px; }
-  .split.y::after { left: calc(50% - 22px); width: 44px; top: 6px; height: 4px; }
+  .split::after { content: ""; position: absolute; border-radius: 2px; background: transparent; }
+  .split.x::after { top: calc(50% - 22px); height: 44px; left: 4px; width: 4px; }
+  .split.y::after { left: calc(50% - 22px); width: 44px; top: 4px; height: 4px; }
   .split:hover::after, .split.dragging::after { background: var(--accent); }
   body.resizing { user-select: none; }
 
-  button { font: inherit; border-radius: 6px; padding: 7px 14px; cursor: pointer; border: 1px solid var(--line);
-    background: var(--panel-2); color: var(--text); }
-  button.primary { background: var(--accent); border-color: var(--accent); color: #111; font-weight: 600; }
-  button.small { padding: 2px 9px; font-size: 12px; text-transform: none; letter-spacing: 0; }
-  button:disabled { opacity: .45; cursor: default; }
+  /* 6 · the conversation */
+  #log { flex: 1; overflow-y: auto; padding: 18px; display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+  .empty { margin: auto; text-align: center; max-width: 46ch; color: var(--muted); }
+  .empty h3 { margin: 0 0 6px; font-size: 18px; font-weight: 600; color: var(--text); }
+  .empty p { margin: 0 0 16px; font-size: 13px; }
+  .empty .ideas { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+  .msg { overflow-wrap: anywhere; }
+  .msg.user { align-self: flex-end; max-width: 85%; background: var(--bubble); border-radius: 4px; padding: 10px 14px; line-height: 1.45; white-space: pre-wrap; }
+  .msg.user img { display: block; max-width: 220px; max-height: 160px; border-radius: 4px; margin-bottom: 8px; }
+  .msg.text { color: var(--text-2); font-size: 14px; line-height: 1.55; white-space: pre-wrap; }
+  .msg.text code { font: 12.5px var(--mono); background: var(--chip); border-radius: 4px; padding: 1px 5px; }
+  .msg.thinking { color: var(--muted); font-size: 13px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .msg.thinking::before { content: "Thinking · "; color: var(--faint); }
+  .msg.thinking.open { white-space: pre-wrap; }
+  .msg.error { color: var(--bad-text); white-space: pre-wrap; }
+  .msg.done { color: var(--faint); font-size: 12px; }
+  .live .msg.text:last-child::after { content: "\25AE"; color: var(--work); margin-left: 2px; animation: pulse 1s ease-in-out infinite; }
 
-  /* conversation */
-  #log { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
-  .empty { color: var(--dim); margin: auto; text-align: center; max-width: 46ch; }
-  .empty .ideas { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 14px; }
-  .msg { max-width: 100%; overflow-wrap: anywhere; }
-  .msg.user { align-self: flex-end; background: #2a2f3a; border-radius: 10px 10px 2px 10px; padding: 8px 12px;
-    max-width: 85%; white-space: pre-wrap; }
-  .msg.text { white-space: pre-wrap; }
-  .msg.text code { font-family: var(--mono); font-size: 13px; background: var(--panel-2); padding: 1px 4px; border-radius: 4px; }
-  .msg.thinking { color: var(--dim); font-size: 13px; font-style: italic; white-space: pre-wrap;
-    border-left: 2px solid var(--line); padding-left: 10px; }
-  .msg.error { color: var(--bad); white-space: pre-wrap; }
-  .live { display: flex; flex-direction: column; gap: 10px; }
-  .live .msg:last-child::after { content: "\25AE"; color: var(--work); margin-left: 2px; animation: pulse 1s ease-in-out infinite; }
-  .msg.writing { border: 1px dashed var(--line); border-radius: 8px; padding: 6px 10px; font-size: 13px; }
-  .msg.writing .label { color: var(--work); font-size: 11px; text-transform: uppercase; letter-spacing: .6px; }
-  .msg.writing pre { margin: 4px 0 0; font: 12px/1.35 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--dim); }
-  .msg.done { color: var(--dim); font-size: 12px; border-top: 1px solid var(--line); padding-top: 6px; }
-  details.tool { border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); font-size: 13px; }
-  details.tool summary { padding: 6px 10px; cursor: pointer; display: flex; gap: 8px; align-items: center; list-style: none; }
-  details.tool summary::-webkit-details-marker { display: none; }
-  .tool .mark { width: 10px; height: 10px; border-radius: 50%; flex: none; border: 2px solid var(--work);
-    border-top-color: transparent; animation: spin .8s linear infinite; }
-  .tool.ok .mark { background: var(--good); border-color: var(--good); animation: none; }
-  .tool.failed .mark { background: var(--bad); border-color: var(--bad); animation: none; }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .tool .name { font-weight: 600; }
-  .tool .brief { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
-  .tool .outcome { font-family: var(--mono); font-size: 12px; color: var(--accent); white-space: nowrap; }
-  .tool.failed .outcome { color: var(--bad); }
-  .tool .body { border-top: 1px solid var(--line); padding: 8px 10px; display: grid; gap: 8px; }
-  .tool pre { margin: 0; font: 12px/1.35 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 340px; overflow: auto; }
-  .tool pre.screen { background: #000; color: #d8d8d8; padding: 8px; border-radius: 4px; white-space: pre; }
-  .tool img { max-width: 100%; image-rendering: pixelated; border-radius: 4px; display: block; }
-  .tool .label { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .6px; }
+  /* 7 · step rows: consecutive tool calls in one block */
+  .steps { display: flex; flex-direction: column; gap: 1px; border-radius: 6px; overflow: hidden; }
+  .step .row { width: 100%; display: flex; align-items: stretch; gap: 10px; padding: 9px 12px; background: var(--raised);
+    border: 0; border-radius: 0; text-align: left; color: var(--text); }
+  .step .row:hover, .step.hl .row { background: #25272d; }
+  .step .bar { width: 4px; border-radius: 2px; flex: none; background: #3a3d45; }
+  .step .lbl { font: 500 13px/18px var(--grotesk); text-transform: uppercase; letter-spacing: .3px; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .step .val { margin-left: auto; font: 12px/18px var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; max-width: 55%; }
+  .step.pending .bar { background: var(--zx-yellow); animation: pulse 1s ease-in-out infinite; }
+  .step.pending .lbl { color: var(--zx-yellow); }
+  .step.good .val { color: var(--good); }
+  .step.bad .val { color: var(--bad-text); }
+  .step .why { background: var(--raised); color: var(--muted); font-size: 13px; padding: 0 12px 9px 26px; margin-top: -1px; }
+  .step .body { background: #14161a; padding: 10px 12px; display: grid; gap: 8px; font-size: 12.5px; }
+  .step .body .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .8px; }
+  .step pre { margin: 0; font: 12px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 340px; overflow: auto; color: var(--text-2); }
+  .step pre.screen { background: #000; color: #d8d8d8; padding: 8px; border-radius: 5px; white-space: pre; }
+  .step .body img { max-width: 100%; image-rendering: pixelated; border-radius: 5px; display: block; }
 
-  form { border-top: 1px solid var(--line); padding: 10px; display: flex; gap: 8px; align-items: flex-end; }
-  textarea { flex: 1; resize: none; background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
-    border-radius: 8px; padding: 9px 11px; font: inherit; min-height: 42px; max-height: 160px; }
-  textarea:focus { outline: 1px solid var(--accent); }
+  /* 8 · the composer */
+  .attached { border-top: 1px solid var(--line); padding: 8px 12px; display: flex; gap: 10px; align-items: center; font-size: 13px; }
+  .attached img { height: 44px; border-radius: 5px; }
+  select { font: inherit; font-size: 12.5px; background: var(--raised); color: var(--text); border: 1px solid var(--line-2); border-radius: 7px; padding: 4px 8px; }
+  form { padding: 12px; border-top: 1px solid var(--line); flex: none; }
+  .composer { background: var(--raised); border: 1px solid var(--box); border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 10px; }
+  .composer textarea { resize: none; border: 0; outline: 0; background: transparent; color: var(--text); font: 14px/1.45 var(--sans);
+    min-height: 22px; max-height: 160px; padding: 0; }
+  .composer textarea::placeholder { color: var(--faint); }
+  .composer .actions { display: flex; align-items: center; gap: 8px; }
+  #attach { border-color: var(--box); border-radius: 6px; color: var(--dim); padding: 3px 9px; }
+  #stop { background: #2a2d34; border-color: #2a2d34; }
+  #send { padding: 6px 14px; }
 
-  /* emulator */
-  /* The picture fills whatever room its pane has and keeps the Spectrum's 4:3 shape. */
-  .tv { background: #000; position: relative; flex: 1; min-height: 0; }
+  /* 9-11 · the Spectrum */
+  .seg { display: flex; gap: 2px; padding: 2px; background: var(--bg); border: 1px solid var(--line-2); border-radius: 8px; }
+  .seg button { border: 0; border-radius: 6px; padding: 4px 10px; color: var(--dim); }
+  .seg button.on { background: #2a2d34; color: var(--accent); }
+  .viewWrap { position: relative; }
+  #viewBtn { display: none; }
+  #resetBtn { color: var(--dim); }
+  .tv { background: #000; position: relative; flex: 1; min-height: 0; outline: 0; }
+  .tv:focus { box-shadow: inset 0 0 0 2px var(--accent); }
   .tv img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }
-  .tv .off { color: #555; font-size: 13px; padding: 0 20px; text-align: center; position: absolute; inset: 0;
-    display: grid; place-items: center; }
-  .tv .off[hidden] { display: none; }
-  .busy { color: var(--work); text-transform: none; letter-spacing: 0; }
+  .tv .off { position: absolute; inset: 0; display: grid; place-items: center; }
+  .tv .off div { aspect-ratio: 4 / 3; height: 70%; max-width: 90%; border: 1px dashed #2f3036; border-radius: 6px; display: grid;
+    place-items: center; color: var(--faint); font-size: 13px; padding: 0 16px; text-align: center; }
+  .tv .report { position: absolute; left: 10px; bottom: 10px; font: 11px var(--mono); background: rgba(0, 0, 0, .7); border-radius: 5px; padding: 3px 8px; }
+  .tv .report.good { color: var(--good); }
+  .tv .report.bad { color: var(--bad-text); }
+  .tv .hint { position: absolute; right: 10px; bottom: 10px; font-size: 11px; color: #aaa; background: rgba(0, 0, 0, .7);
+    border-radius: 5px; padding: 3px 8px; pointer-events: none; max-width: 70%; }
+  .tv .stats { position: absolute; top: 10px; right: 10px; background: #000c; color: #9f9; font: 11px/1.5 var(--mono);
+    padding: 6px 9px; border-radius: 6px; white-space: pre; pointer-events: none; }
+  .tv .frozen { position: absolute; top: 10px; left: 10px; font-size: 12px; border-radius: 999px; padding: 3px 10px;
+    background: var(--accent); color: #111; border: 0; font-weight: 600; }
+  .runs { border-top: 1px solid var(--line); padding: 10px 14px 12px; display: flex; flex-direction: column; gap: 8px; flex: none; }
+  .runs .head { display: flex; justify-content: space-between; font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); }
+  .runs .strip { display: flex; gap: 10px; overflow-x: auto; padding: 3px 3px 2px; }
+  .run { flex: none; display: flex; flex-direction: column; gap: 5px; border: 0; padding: 0; background: none; color: inherit; }
+  .run .pic { width: 92px; height: 56px; border-radius: 5px; background: #000; overflow: hidden; display: grid; place-items: center; }
+  .run .pic img { width: 100%; height: 100%; object-fit: cover; image-rendering: pixelated; display: block; }
+  .run .cap { display: flex; align-items: center; gap: 5px; font: 10px var(--mono); max-width: 92px; white-space: nowrap; overflow: hidden; }
+  .run .cap::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
+  .run.good .cap { color: var(--good); }
+  .run.bad .cap { color: var(--bad-text); }
+  .run.past { opacity: .55; }
+  .run.past:hover { opacity: .9; }
+  .run.bad .pic { box-shadow: inset 0 0 0 2px var(--bad); }
+  .run.on .pic { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .run.next .pic { border: 1px dashed #2f3036; background: transparent; color: var(--work); font-size: 11px; }
 
-  /* source */
-  .tabs { display: flex; gap: 4px; overflow-x: auto; padding: 6px 8px; border-bottom: 1px solid var(--line); flex: none; }
-  .tabs button { padding: 3px 10px; font-size: 13px; font-family: var(--mono); white-space: nowrap; background: transparent; }
-  .tabs button.on { background: var(--panel-2); border-color: var(--accent); }
-  .tabs a { padding: 3px 8px; font: 12px var(--mono); color: var(--dim); white-space: nowrap; align-self: center; }
-  #source { flex: 1; overflow: auto; margin: 0; padding: 10px 14px; font: 13px/1.5 var(--mono); white-space: pre; tab-size: 8; }
-  #source .num { color: var(--accent); }
-  #source .rem { color: var(--dim); }
-  #source .str { color: #8fd694; }
+  /* 12-13 · the program */
+  #tabs { display: flex; gap: 2px; align-items: center; overflow-x: auto; min-width: 0; flex: 1; scrollbar-width: none; }
+  #tabs button { font: 12.5px var(--mono); padding: 5px 10px; border: 0; border-radius: 7px; color: var(--muted); white-space: nowrap;
+    display: flex; align-items: center; gap: 6px; }
+  #tabs button.on { background: var(--chip); color: var(--text); }
+  #tabs button.on::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+  #newFile { color: var(--faint); font: 14px var(--mono); padding: 3px 8px; border: 0; }
+  #newName { font: 12.5px var(--mono); background: var(--raised); color: var(--text); border: 1px solid var(--accent); border-radius: 7px; padding: 4px 8px; width: 15ch; }
+  #tapeLink { font-size: 12.5px; color: var(--dim); text-decoration: none; padding: 5px 6px; white-space: nowrap; }
+  #tapeLink:hover { color: var(--text); }
+  #fileNote { font-size: 12px; color: var(--muted); white-space: nowrap; }
+  #source { flex: 1; overflow: auto; margin: 0; padding: 10px 0; font: 12.5px/1.6 var(--mono); color: var(--text-2); tab-size: 8; min-height: 0; }
+  #source .ln { display: block; white-space: pre; padding-right: 16px; }
+  #source .num { display: inline-block; width: 52px; padding-right: 16px; text-align: right; color: var(--accent); }
+  #source .plain { padding-left: 16px; }
+  #source .str { color: var(--string); }
+  #source .rem { color: var(--muted); }
+  #source .none { margin: auto; }
+  .programEmpty { flex: 1; display: grid; place-items: center; align-content: center; gap: 8px; color: var(--muted); font-size: 13px; }
+  #editor { flex: 1; resize: none; border: 0; margin: 0; padding: 10px 16px 10px 68px; font: 12.5px/1.6 var(--mono); color: var(--text-2);
+    white-space: pre; tab-size: 8; background: #14161a; outline: 0; min-height: 0; }
 
-  /* projects, attachments, the editor, the stats read-out */
-  .panel > h2 > span { display: flex; align-items: center; gap: 6px; }
-  #projectName { color: var(--text); text-transform: none; letter-spacing: 0; font-size: 13px; overflow: hidden;
-    text-overflow: ellipsis; white-space: nowrap; max-width: 40ch; }
+  /* the sheets */
   .overlay { position: fixed; inset: 0; background: #000a; z-index: 20; display: grid; place-items: center; padding: 20px; }
-  .overlay[hidden] { display: none; }
-  .sheet { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; width: min(1000px, 100%);
-    max-height: 100%; display: flex; flex-direction: column; overflow: hidden; }
-  .sheet > h2 { margin: 0; padding: 12px 16px; font-size: 15px; display: flex; justify-content: space-between;
-    align-items: center; border-bottom: 1px solid var(--line); }
-  .cards { padding: 16px; overflow-y: auto; display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
-  .card { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 0; text-align: left;
-    overflow: hidden; display: flex; flex-direction: column; }
+  .sheet { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; width: min(1000px, 100%); max-height: 100%;
+    display: flex; flex-direction: column; overflow: hidden; }
+  .sheet > h2 { margin: 0; height: 44px; flex: none; padding: 0 12px 0 16px; font-size: 14px; font-weight: 600; display: flex;
+    justify-content: space-between; align-items: center; border-bottom: 1px solid var(--line); }
+  .cards { padding: 16px; overflow-y: auto; display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+  .card { background: var(--raised); border: 1px solid var(--line-2); border-radius: 12px; padding: 0; text-align: left; overflow: hidden; display: flex; flex-direction: column; }
   .card:hover, .card.current { border-color: var(--accent); }
-  .card .shot { aspect-ratio: 4 / 3; background: #000; display: grid; place-items: center; color: #555; font-size: 12px; }
+  .card .shot { aspect-ratio: 4 / 3; background: #000; display: grid; place-items: center; color: var(--faint); font-size: 12px; }
   .card .shot img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; display: block; }
   .card .what { padding: 8px 10px; display: grid; gap: 2px; }
   .card .what b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .card .what span { color: var(--dim); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card .what span { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .history { display: grid; grid-template-columns: minmax(180px, 260px) minmax(0, 1fr); min-height: 0; flex: 1; height: 70vh; }
   .versions { border-right: 1px solid var(--line); overflow-y: auto; }
-  .versions button { display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line);
-    border-radius: 0; background: none; padding: 8px 12px; }
-  .versions button.on { background: var(--panel-2); color: var(--accent); }
-  .versions small { display: block; color: var(--dim); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .versions button { display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 8px 12px; font-size: 13px; }
+  .versions button.on { background: var(--raised); color: var(--accent); }
+  .versions small { display: block; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .version { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-  .version .tabs { border-bottom: 1px solid var(--line); }
-  .version pre { flex: 1; margin: 0; padding: 10px 14px; overflow: auto; font: 13px/1.5 var(--mono); }
-  .version .bar { padding: 8px 12px; border-top: 1px solid var(--line); display: flex; gap: 10px; align-items: center; font-size: 13px; color: var(--dim); }
+  .version .vtabs { display: flex; gap: 2px; padding: 6px 8px; border-bottom: 1px solid var(--line); overflow-x: auto; }
+  .version .vtabs button { font: 12.5px var(--mono); border: 0; color: var(--muted); }
+  .version .vtabs button.on { background: var(--chip); color: var(--text); }
+  .version pre { flex: 1; margin: 0; padding: 10px 14px; overflow: auto; font: 12.5px/1.6 var(--mono); }
+  .version .bar { padding: 8px 12px; border-top: 1px solid var(--line); display: flex; gap: 10px; align-items: center; font-size: 13px; color: var(--muted); }
   .version .bar span { flex: 1; }
   pre .add { background: #1d3a24; display: block; }
   pre .del { background: #3a1d1b; color: #c99; display: block; text-decoration: line-through; }
-  @media (max-width: 700px) { .history { grid-template-columns: minmax(0, 1fr); height: auto; } }
   .notes { padding: 8px 16px 16px; overflow-y: auto; }
-  .notes p { color: var(--dim); font-size: 13px; margin: 8px 0 12px; }
+  .notes p { color: var(--muted); font-size: 13px; margin: 8px 0 12px; }
   .notes a { color: var(--accent); word-break: break-all; }
-  .note[hidden] { display: none; }
-  .note { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-top: 1px solid var(--line); font-size: 14px; }
+  .note { display: flex; gap: 10px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); font-size: 14px; }
   .note span { flex: 1; }
-  .note small { color: var(--dim); font-size: 12px; white-space: nowrap; }
-  .attached { border-top: 1px solid var(--line); padding: 8px 10px; display: flex; gap: 10px; align-items: center; font-size: 13px; }
-  .attached[hidden] { display: none; }
-  .attached img { height: 44px; border-radius: 4px; }
-  select { font: inherit; background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
-  .msg.user img { display: block; max-width: 220px; max-height: 160px; border-radius: 6px; margin-bottom: 6px; }
-  #editor { flex: 1; resize: none; border: 0; border-radius: 0; margin: 0; padding: 10px 14px; font: 13px/1.5 var(--mono);
-    white-space: pre; tab-size: 8; max-height: none; background: #14161a; }
-  #editor[hidden], #newName[hidden] { display: none; }
-  #newName { font: 13px var(--mono); background: var(--panel-2); color: var(--text); border: 1px solid var(--accent);
-    border-radius: 6px; padding: 3px 8px; width: 16ch; }
-  .tv:focus { outline: 2px solid var(--accent); outline-offset: -2px; }
-  .tv .hint { position: absolute; left: 8px; bottom: 6px; font-size: 11px; color: #fff9; background: #0008; padding: 2px 6px;
-    border-radius: 4px; pointer-events: none; }
-  .tv .stats { position: absolute; top: 8px; right: 8px; background: #000c; color: #9f9; font: 11px/1.5 var(--mono);
-    padding: 6px 9px; border-radius: 6px; white-space: pre; pointer-events: none; }
-  .tv .stats[hidden], .tv .hint[hidden] { display: none; }
-  button.on { border-color: var(--accent); color: var(--accent); }
+  .note small { color: var(--muted); font-size: 12px; white-space: nowrap; }
   .notice { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 30; max-width: min(640px, 90vw);
-    background: #3a1d1b; border: 1px solid var(--bad); color: var(--text); padding: 9px 16px; border-radius: 8px;
-    font-size: 14px; cursor: pointer; box-shadow: 0 6px 20px #0008; }
+    background: #3a1d1b; border: 1px solid var(--bad); color: var(--text); padding: 9px 16px; border-radius: 8px; font-size: 14px; cursor: pointer; }
 
+  @media (max-width: 1100px) {
+    .content { grid-template-columns: minmax(320px, var(--chat, 400px)) 12px minmax(0, 1fr); }
+    #viewBtn { display: block; }
+    .seg { display: none; position: absolute; right: 0; top: calc(100% + 6px); z-index: 6; flex-direction: column; min-width: 130px; }
+    .seg.open { display: flex; }
+    .seg button { text-align: left; }
+  }
   @media (max-width: 900px) {
-    body { height: auto; display: block; }
-    main { grid-template-columns: minmax(0, 1fr); gap: 16px; }
-    .right { grid-template-rows: auto auto; gap: 16px; }
+    body { display: block; height: auto; }
+    .rail { flex-direction: row; height: 48px; padding: 0 12px; border-right: 0; border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 4; }
+    .logo { margin: 0 6px 0 0; }
+    .logo i { height: 18px; }
+    .projectsRail { flex-direction: row; overflow-x: auto; overflow-y: hidden; padding: 0 3px; }
+    .top { flex-wrap: wrap; height: auto; padding: 8px 12px; row-gap: 8px; }
+    .app { display: block; }
+    .content { display: flex; flex-direction: column; gap: 12px; }
+    .right { display: contents; }
     .split { display: none; }
+    .pane.spectrum { order: 1; }
+    .pane.agent { order: 2; height: 75vh; }
+    .pane.program { order: 3; min-height: 50vh; }
     .tv { flex: none; aspect-ratio: 4 / 3; }
-    .panel.chat { height: 75vh; }
-    #source { max-height: 60vh; }
   }
 </style>
 </head>
 <body>
-<header>
-  <h1>SpecDev</h1>
-  <p>Describe a ZX Spectrum program. The agent writes it, runs it on the emulator, and fixes it until it works.</p>
-  <div class="budget" id="budget" hidden>
-    <span>Budget <b id="budgetLeft"></b> left</span>
-    <span class="meter" title="How much of your budget is left"><i id="budgetBar"></i></span>
-    <button class="small" id="topup" title="Add to your budget">Top up</button>
-    <div class="amounts" id="amounts" hidden></div>
-  </div>
-  <a class="adminLink" id="adminLink" href="/admin.html" hidden>Admin</a>
-  <div class="status" id="status"><span class="dot"></span><span id="statusText">Idle</span></div>
-</header>
-<main>
-  <section class="panel chat">
-    <h2><span>Agent <span id="projectName"></span></span>
-      <span><button class="small" id="projects" title="Open one of your earlier projects">Projects</button>
-      <button class="small" id="memoryBtn" title="What the agent remembers about you between conversations">Memory</button>
-      <button class="small" id="reset" title="Start a new project with an empty chat">New project</button></span></h2>
-    <div id="log"></div>
-    <div class="attached" id="attached" hidden>
-      <img id="attachedImg" alt="The picture you are sending">
-      <select id="kind" title="What the picture is">
-        <option value="picture">Draw this as Spectrum line art</option>
-        <option value="listing">It is a program listing: type it in and run it</option>
-      </select>
-      <button type="button" class="small" id="unattach">Remove</button>
+<nav class="rail" aria-label="Projects">
+  <div class="logo" aria-hidden="true"><i style="background:#d80000"></i><i style="background:#d8d800"></i><i style="background:#00d800"></i><i style="background:#00d8d8"></i></div>
+  <div class="projectsRail" id="rail"></div>
+  <button class="newProject" id="reset" title="New project">+</button>
+  <button class="small" id="projects" title="All your projects">See all</button>
+  <div class="spacer"></div>
+  <button class="small" id="memoryBtn" title="What the agent remembers about you between conversations">Memory</button>
+  <button class="avatar" id="avatar" title="You">·</button>
+</nav>
+<div class="menu" id="avatarMenu" hidden>
+  <div class="who" id="who">On this machine</div>
+  <a id="adminLink" href="/admin.html" hidden>Admin</a>
+  <button id="menuProjects">All projects</button>
+  <button id="menuMemory">Memory</button>
+</div>
+
+<div class="app">
+  <header class="top">
+    <div class="title">
+      <span id="projectName" title="Click to rename">New project</span>
+      <input id="projectRename" maxlength="48" hidden>
+      <span id="projectSub"></span>
     </div>
-    <form id="form">
-      <input type="file" id="pick" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
-      <button type="button" id="attach" title="Send a picture: a program listing to type in, or an image to draw">Image</button>
-      <textarea id="input" rows="1" placeholder="What should it build?  e.g. a bouncing ball that leaves a rainbow trail"></textarea>
-      <button type="button" id="stop" hidden>Stop</button>
-      <button class="primary" id="send">Send</button>
-    </form>
-  </section>
-  <div class="split x" id="splitChat" title="Drag to resize; double-click to reset"></div>
-  <div class="right">
-    <section class="panel">
-      <h2>Spectrum <span><span class="busy" id="busy"></span>
-        <button class="small" id="soundBtn" title="Hear the Spectrum">Sound off</button>
-        <button class="small" id="resetBtn" title="Reset the Spectrum: a clean machine with nothing loaded">Reset</button>
-        <button class="small" id="statsBtn" title="Frame rate, latency, memory and processor use">Stats</button></span></h2>
-      <div class="tv" id="tvBox" tabindex="0" title="Click, then type: your keys go to the Spectrum">
-        <img id="tv" alt="The emulator screen" hidden>
-        <div class="off" id="tvOff">The emulator is not running yet. It starts when the agent first runs a program.</div>
-        <div class="hint" id="keyHint" hidden>Typing goes to the Spectrum  ·  Shift = CAPS SHIFT, Ctrl = SYMBOL SHIFT, Esc = BREAK  ·  click elsewhere to stop</div>
-        <div class="stats" id="stats" hidden></div>
+    <div class="grow"></div>
+    <div class="pill" id="status" role="status"><span class="dot"></span><span id="statusText">Idle</span></div>
+    <div class="grow"></div>
+    <div class="budget" id="budget" hidden title="Your budget: click to top up">
+      <span>Budget</span>
+      <span class="meter"><i id="budgetBar"></i></span>
+      <b id="budgetLeft"></b>
+      <button class="primary" id="topup" hidden>Top up</button>
+      <div class="amounts" id="amounts" hidden></div>
+    </div>
+    <button id="shareBtn" title="A link anyone can open to play this program"><span class="live" id="shareLive" hidden></span>Share</button>
+  </header>
+
+  <main class="content">
+    <section class="pane agent">
+      <div id="log"></div>
+      <div class="attached" id="attached" hidden>
+        <img id="attachedImg" alt="The picture you are sending">
+        <select id="kind" title="What the picture is">
+          <option value="picture">Draw this as Spectrum line art</option>
+          <option value="listing">It is a program listing: type it in and run it</option>
+        </select>
+        <button type="button" class="text" id="unattach">Remove</button>
       </div>
+      <form id="form">
+        <input type="file" id="pick" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
+        <div class="composer">
+          <textarea id="input" rows="1" placeholder="What should it build?"></textarea>
+          <div class="actions">
+            <button type="button" id="attach" title="Send a picture: a program listing to type in, or an image to draw">+ Image</button>
+            <div class="grow" style="flex:1"></div>
+            <button type="button" id="stop" hidden>Stop</button>
+            <button class="primary" id="send">Send</button>
+          </div>
+        </div>
+      </form>
     </section>
-    <div class="split y" id="splitTv" title="Drag to resize; double-click to reset"></div>
-    <section class="panel">
-      <h2>Program <span><span id="fileNote"></span>
-        <input id="newName" placeholder="name.bas" hidden>
-        <button class="small" id="newFile" title="Write a new program yourself">New</button>
-        <button class="small" id="editFile" title="Change this program yourself">Edit</button>
-        <button class="small" id="saveFile" hidden>Save &amp; run</button>
-        <button class="small" id="runFile" title="Run this program on the emulator">Run</button>
-        <button class="small" id="historyBtn" title="Earlier versions of this project's programs">History</button>
-        <button class="small" id="shareBtn" title="A link anyone can open to play this program">Share</button></span></h2>
-      <div class="tabs" id="tabs"></div>
-      <pre id="source"></pre>
-      <textarea id="editor" spellcheck="false" hidden></textarea>
-    </section>
-  </div>
-</main>
+    <div class="split x" id="splitChat" title="Drag to resize; double-click to reset"></div>
+    <div class="right">
+      <section class="pane spectrum">
+        <div class="paneHead">
+          <span class="name">Spectrum 128</span>
+          <span class="sub" id="busy"></span>
+          <div class="grow"></div>
+          <div class="viewWrap">
+            <button class="text" id="viewBtn">View ▾</button>
+            <div class="seg" id="seg">
+              <button id="soundBtn" title="Hear the Spectrum">Sound</button>
+              <button id="keysBtn" title="Type on the Spectrum">Keyboard</button>
+              <button id="statsBtn" title="Frame rate, latency, memory and processor use">Stats</button>
+            </div>
+          </div>
+          <button id="resetBtn" title="Reset the Spectrum: a clean machine with nothing loaded">Reset</button>
+        </div>
+        <div class="tv" id="tvBox" tabindex="0" aria-label="The Spectrum's screen: click, then type">
+          <img id="tv" alt="The emulator screen" hidden>
+          <img id="runFrame" alt="The screen at the end of an earlier run" hidden>
+          <div class="off" id="tvOff"><div>Starts when the agent first runs a program</div></div>
+          <button class="frozen" id="backLive" hidden>Back to live</button>
+          <div class="report" id="lastReport" hidden></div>
+          <div class="hint" id="keyHint">Click to type on the Spectrum</div>
+          <div class="stats" id="stats" hidden></div>
+        </div>
+        <div class="runs" id="runs" hidden>
+          <div class="head"><span>Runs this session</span><span id="runCount"></span></div>
+          <div class="strip" id="runStrip"></div>
+        </div>
+      </section>
+      <div class="split y" id="splitTv" title="Drag to resize; double-click to reset"></div>
+      <section class="pane program">
+        <div class="paneHead">
+          <div id="tabs"></div>
+          <input id="newName" placeholder="name.bas" hidden>
+          <button id="newFile" title="Write a new program yourself">+</button>
+          <span id="fileNote"></span>
+          <button class="text" id="historyBtn" title="Earlier versions of this project's programs">History</button>
+          <a id="tapeLink" hidden>.tap ↓</a>
+          <button id="editFile" title="Change this program yourself">Edit</button>
+          <button class="primary" id="runFile" title="Run this program on the emulator">▶ Run</button>
+          <button class="primary" id="saveFile" hidden>Save &amp; run</button>
+        </div>
+        <pre id="source"></pre>
+        <div class="programEmpty" id="programEmpty" hidden>
+          <button id="newProgram">New program</button><span>or ask the agent</span>
+        </div>
+        <textarea id="editor" spellcheck="false" hidden></textarea>
+      </section>
+    </div>
+  </main>
+</div>
+
 <div class="overlay" id="library" hidden>
   <div class="sheet">
-    <h2>Your projects <button class="small" id="closeLibrary">Close</button></h2>
+    <h2>Your projects <button class="text" id="closeLibrary">Close</button></h2>
     <div class="cards" id="cards"></div>
   </div>
 </div>
 <div class="overlay" id="historySheet" hidden>
   <div class="sheet">
-    <h2>Earlier versions <button class="small" id="closeHistory">Close</button></h2>
+    <h2>Earlier versions <button class="text" id="closeHistory">Close</button></h2>
     <div class="history">
       <div class="versions" id="versions"></div>
       <div class="version">
-        <div class="tabs" id="versionTabs"></div>
+        <div class="vtabs" id="versionTabs"></div>
         <pre id="versionText"></pre>
-        <div class="bar"><span id="versionNote"></span><button class="small" id="restore" hidden>Go back to this version</button></div>
+        <div class="bar"><span id="versionNote"></span><button class="primary" id="restore" hidden>Go back to this version</button></div>
       </div>
     </div>
   </div>
 </div>
 <div class="overlay" id="shareSheet" hidden>
   <div class="sheet" style="width: min(560px, 100%)">
-    <h2>Share this program <button class="small" id="closeShare">Close</button></h2>
+    <h2>Share this program <button class="text" id="closeShare">Close</button></h2>
     <div class="notes">
       <p id="shareText"></p>
       <div class="note" id="shareLinkRow" hidden><span><a id="shareLink" target="_blank" rel="noopener"></a></span>
-        <button class="small" id="shareCopy">Copy</button></div>
+        <button id="shareCopy">Copy</button></div>
       <div class="note"><span></span>
-        <button class="small" id="shareStop" hidden>Stop sharing</button>
-        <button class="small primary" id="shareGo"></button></div>
+        <button id="shareStop" hidden>Stop sharing</button>
+        <button class="primary" id="shareGo"></button></div>
     </div>
   </div>
 </div>
 <div class="overlay" id="memory" hidden>
   <div class="sheet" style="width: min(640px, 100%)">
-    <h2>What the agent remembers <button class="small" id="closeMemory">Close</button></h2>
+    <h2>What the agent remembers <button class="text" id="closeMemory">Close</button></h2>
     <div class="notes" id="notes"></div>
   </div>
 </div>
@@ -334,7 +469,8 @@ const IDEAS = [
   "Draw a spider's web with DRAW and CIRCLE",
   "A countdown and rocket launch animation",
 ];
-let generation = 0, after = 0, running = false, tools = {}, started = null;
+const PLACEHOLDER = "What should it build?", QUEUE_PLACEHOLDER = "Add something while it works — it'll be queued…";
+let generation = 0, after = 0, running = false, started = null, busyText = "", project = null;
 let currentFile = null, pinned = false, fileStamp = {};
 let shownFiles = [], filesJson = "", filesDirty = true;  // the file list as last pushed; redraw it when set
 
@@ -359,14 +495,19 @@ function notice(text) {
   setTimeout(() => strip.remove(), 8000);
 }
 const tell = err => notice(err.message);
+const ago = t => {
+  const s = Date.now() / 1000 - t;
+  return s < 90 ? "just now" : s < 5400 ? Math.round(s / 60) + "m ago" : s < 129600 ? Math.round(s / 3600) + "h ago" : Math.round(s / 86400) + "d ago";
+};
 
 function showEmpty() {
   const box = el("div", "empty");
-  box.append(el("div", "", "Nothing yet. Say what you want, or try one of these:"));
+  box.append(el("h3", "", "What should it build?"),
+    el("p", "", "Describe a ZX Spectrum program. The agent writes it, runs it on the emulator, and fixes it until it works."));
   const ideas = el("div", "ideas");
   // Four of them, different every time.
   for (const idea of [...IDEAS].sort(() => Math.random() - 0.5).slice(0, 4)) {
-    const b = el("button", "small", idea);
+    const b = el("button", "", idea);
     b.onclick = () => { input.value = idea; send(); };
     ideas.append(b);
   }
@@ -374,123 +515,327 @@ function showEmpty() {
   log.replaceChildren(box);
 }
 
-function brief(name, inp) {
-  if (inp.file) return inp.file + (inp.code && inp.code.length ? "  + " + inp.code.join(", ") : "");
-  if (inp.file_path) return inp.file_path.split(/[\\/]/).pop();
-  if (inp.keys) return inp.keys.join(" ");
-  if (inp.text !== undefined) return JSON.stringify(inp.text);
-  if (inp.pattern) return inp.pattern;
-  if (inp.note) return JSON.stringify(inp.note);
-  if (inp.number) return "note " + inp.number;
-  if (inp.wait_seconds) return "wait up to " + inp.wait_seconds + " s";
-  return "";
+// -- the agent's steps ---------------------------------------------------------------------
+// Each tool call is a row: a coloured bar for its kind, a label, and its result on the right.
+// Consecutive calls share one block; reads of files collapse into one "+N reads" row.
+const BAR = { green: "var(--zx-green)", red: "var(--zx-red)", cyan: "var(--zx-cyan)", yellow: "var(--zx-yellow)",
+              magenta: "var(--zx-magenta)", grey: "#3a3d45" };
+const READS = ["Read", "Glob", "Grep"];
+let steps = {}, group = null, readsRow = null, explainNext = null, lastStepLabel = "";
+
+const base = path => String(path || "").split(/[\\/]/).pop();
+function editLabel(inp) {
+  const m = /^\s*(\d+)\s/.exec(inp.old_string || "");
+  return m ? "EDIT line " + m[1] : "EDIT " + base(inp.file_path);
+}
+function editValue(inp) {
+  const a = (inp.old_string || "").split(/(\W+)/), b = (inp.new_string || "").split(/(\W+)/);
+  if (a.length === b.length) {
+    const diff = a.map((t, i) => [t, b[i]]).filter(([x, y]) => x !== y);
+    if (diff.length === 1 && diff[0][0].trim() && diff[0][1].trim()) return diff[0][0] + " → " + diff[0][1];
+  }
+  const changed = lineDiff(inp.old_string || "", inp.new_string || "").filter(l => l.kind === "add").length;
+  return changed === 1 ? "1 change" : Math.max(changed, 1) + " changes";
+}
+const lines = text => String(text || "").split("\n").filter(l => l.trim()).length;
+function describe(name, inp) {
+  switch (name) {
+    case "Write": return { label: "WRITE " + base(inp.file_path), bar: "green", value: lines(inp.content) + " lines" };
+    case "Edit": return { label: editLabel(inp), bar: "green", value: editValue(inp) };
+    case "run_program": return { label: "RUN", bar: "green", value: "" };
+    case "debug_program": return { label: "DEBUG", bar: "green", value: (inp.breakpoints || []).length + " breakpoints" };
+    case "read_screen": return { label: "READ SCREEN", bar: "cyan", value: "" };
+    case "screenshot": return { label: "SCREENSHOT", bar: "cyan", value: "" };
+    case "press_keys": return { label: "KEYS", bar: "yellow", value: (inp.keys || []).join(" ") };
+    case "type_text": return { label: "TYPE", bar: "yellow", value: JSON.stringify(inp.text || "") };
+    case "assemble": return { label: "ASSEMBLE " + base(inp.file), bar: "green", value: "" };
+    case "remember": return { label: "REMEMBER", bar: "magenta", value: inp.note || "" };
+    case "forget": return { label: "FORGET", bar: "magenta", value: "note " + inp.number };
+    default: return { label: name.replace(/_/g, " "), bar: "grey", value: "" };
+  }
+}
+// A report is good when the program finished as it should: 0 OK, 9 STOP, or a BREAK the agent pressed itself.
+function reportOk(report, step) {
+  if (!report || report.startsWith("(")) return false;
+  if (/^(0 OK|9 STOP)/.test(report)) return true;
+  if (/^D BREAK/.test(report) && step) {
+    const prev = step.el.previousElementSibling;
+    const keys = prev && prev.step && prev.step.name === "press_keys" ? prev.step.input.keys || [] : [];
+    return keys.some(k => /BREAK|CAPS_SHIFT\+SPACE/i.test(k));
+  }
+  return false;
 }
 
-function fileOf(name, inp) {
-  const path = inp.file_path || inp.file;
-  if (!path || !["Write", "Edit", "run_program", "assemble"].includes(name)) return null;
-  const base = path.split(/[\\/]/).pop();
-  return /\.(bas|asm|inc)$/i.test(base) ? base : null;
+function makeStep(name, inp, id) {
+  const d = describe(name, inp);
+  const node = el("div", "step pending");
+  const row = el("button", "row");
+  const bar = el("i", "bar"), lbl = el("span", "lbl", d.label), val = el("span", "val", "now");
+  row.append(bar, lbl, val);
+  const body = el("div", "body"); body.hidden = true;
+  const shown = Object.assign({}, inp);
+  for (const key of ["content", "new_string", "old_string"]) if (shown[key]) shown[key] = shown[key].length + " characters";
+  body.append(el("div", "label", "Asked"), el("pre", "", JSON.stringify(shown, null, 1)));
+  if (inp.content) body.append(el("pre", "", inp.content));
+  row.onclick = () => { body.hidden = !body.hidden; };
+  node.append(row, body);
+  const step = { id, name, input: inp, el: node, bar, val, body, d };
+  node.step = step;
+  lastStepLabel = d.label;
+  return step;
+}
+
+function addTool(e) {
+  if (!group || log.lastElementChild !== group) { group = el("div", "steps"); readsRow = null; log.append(group); }
+  if (READS.includes(e.name)) {   // reads of files collapse into one row
+    if (!readsRow || group.lastElementChild !== readsRow.el) {
+      readsRow = makeStep("reads", {}, null);
+      readsRow.el.classList.remove("pending");
+      readsRow.bar.style.background = BAR.grey;
+      readsRow.body.replaceChildren();
+      readsRow.count = 0;
+      group.append(readsRow.el);
+    }
+    readsRow.count += 1;
+    readsRow.el.querySelector(".lbl").textContent = "+" + readsRow.count + (readsRow.count === 1 ? " read" : " reads");
+    readsRow.val.textContent = base(e.input.file_path || e.input.path) || e.input.pattern || "";
+    readsRow.body.append(el("div", "label", e.name + " " + (e.input.file_path ? base(e.input.file_path) : e.input.pattern || "")));
+    steps[e.id] = { reads: readsRow };
+    return;
+  }
+  const step = makeStep(e.name, e.input, e.id);
+  group.append(step.el);
+  steps[e.id] = step;
+  const file = fileOf(e.name, e.input);
+  if (file && !pinned) { currentFile = file; fileStamp = {}; filesDirty = true; }
+}
+
+function addResult(e) {
+  const found = steps[e.id];
+  if (!found) return;
+  if (found.reads) { if (e.error) found.reads.body.append(el("pre", "", e.text || "failed")); return; }
+  const step = found;
+  step.el.classList.remove("pending");
+  const report = (/^report: (.*)$/m.exec(e.text || "") || [])[1];
+  let value = step.d.value, colour = step.d.bar, ok = !e.error;
+  if (step.name === "run_program" || step.name === "debug_program") {
+    ok = !e.error && reportOk(report, step);
+    value = e.error ? (e.text || "failed").split("\n")[0] : report && !report.startsWith("(") ? report : "no report";
+    colour = ok ? "green" : "red";
+    addRun(step, report || (e.error ? "failed" : "no report"), ok, e.frame);
+    if (!ok) explainNext = step;
+  } else if (step.name === "read_screen") value = (e.text || "").split("\n").filter(l => /^\s*\d+\|.*\S/.test(l)).length + " lines";
+  else if (step.name === "screenshot") value = (e.images || []).length === 1 ? "1 image" : (e.images || []).length + " images";
+  else if (step.name === "assemble") {
+    value = e.error ? (e.text || "").split("\n").find(l => /error/i.test(l)) || (e.text || "failed").split("\n")[0]
+                    : ((/(\d+) bytes/.exec(e.text || "") || [])[1] || "?") + " bytes";
+    colour = e.error ? "red" : "green";
+  } else if (e.error) { colour = "red"; value = (e.text || "failed").split("\n")[0]; }
+  step.bar.style.background = BAR[colour];
+  step.val.textContent = value; step.val.title = value;
+  step.el.classList.toggle("good", ok && (step.name === "run_program" || step.name === "debug_program"));
+  step.el.classList.toggle("bad", !ok);
+  step.body.append(el("div", "label", e.error ? "Problem" : "Result"));
+  if (e.text) step.body.append(el("pre", report !== undefined ? "screen" : "", e.text));
+  for (const src of e.images || []) { const img = el("img"); img.src = src; step.body.append(img); }
+  if (!ok && !replaying) step.body.hidden = false;   // a failure opens as it happens (not when an old chat is replayed)
+  if (report !== undefined) showReport(report, ok);
 }
 
 function addEvent(e) {
   if (log.querySelector(".empty")) log.replaceChildren();
+  if (e.kind === "tool") return addTool(e);
+  if (e.kind === "result") return addResult(e);
   if (e.kind === "user") {
     const box = el("div", "msg user");
     if (e.image) { const img = el("img"); img.src = "/api/file?name=" + encodeURIComponent(e.image); box.append(img); }
     box.append(e.text || "");
     log.append(box);
-  }
-  else if (e.kind === "text") log.append(el("div", "msg text", e.text));
-  else if (e.kind === "thinking") log.append(el("div", "msg thinking", e.text));
-  else if (e.kind === "error") log.append(el("div", "msg error", e.text));
+    explainNext = null;
+  } else if (e.kind === "text") {
+    if (explainNext) {                         // the agent's first sentence after a failed run explains it
+      const why = el("div", "why", (/^[^.!?\n]*[.!?]?/.exec(e.text.trim()) || [""])[0]);
+      explainNext.el.insertBefore(why, explainNext.body);
+      explainNext = null;
+    }
+    log.append(el("div", "msg text", e.text));
+  } else if (e.kind === "thinking") {
+    const t = el("div", "msg thinking", e.text);
+    t.onclick = () => t.classList.toggle("open");
+    log.append(t);
+  } else if (e.kind === "error") log.append(el("div", "msg error", e.text));
   else if (e.kind === "done") {
     const cost = e.cost ? "  ·  $" + e.cost.toFixed(2) : "";
     log.append(el("div", "msg done" + (e.error ? " error" : ""),
       (e.error ? "Stopped: " + (e.text || "the agent ended with an error") : "Finished") + "  ·  " + e.seconds + " s  ·  " + e.turns + " steps" + cost));
-  } else if (e.kind === "tool") {
-    const d = el("details", "tool");
-    const s = el("summary");
-    s.append(el("span", "mark"), el("span", "name", e.name), el("span", "brief", brief(e.name, e.input)), el("span", "outcome"));
-    const body = el("div", "body");
-    const shown = Object.assign({}, e.input);
-    for (const key of ["content", "new_string", "old_string"]) if (shown[key]) shown[key] = shown[key].length + " characters";
-    body.append(el("div", "label", "Asked"), el("pre", "", JSON.stringify(shown, null, 1)));
-    if (e.input.content) body.append(el("pre", "", e.input.content));
-    d.append(s, body);
-    log.append(d);
-    tools[e.id] = d;
-    const file = fileOf(e.name, e.input);
-    if (file && !pinned) { currentFile = file; fileStamp = {}; filesDirty = true; }
-  } else if (e.kind === "result") {
-    const d = tools[e.id];
-    if (!d) return;
-    d.classList.add(e.error ? "failed" : "ok");
-    const body = d.querySelector(".body");
-    body.append(el("div", "label", e.error ? "Problem" : "Result"));
-    const report = /^report: (.*)$/m.exec(e.text || "");
-    if (e.text) body.append(el("pre", report ? "screen" : "", e.text));
-    for (const src of e.images || []) { const img = el("img"); img.src = src; body.append(img); d.open = true; }
-    const outcome = d.querySelector(".outcome");
-    if (e.error) { outcome.textContent = (e.text || "failed").split("\n")[0].slice(0, 60); d.open = true; }
-    else if (report) outcome.textContent = report[1].startsWith("(") ? "no report" : report[1];
+    loadRail();                                // the project's picture may have changed
   }
 }
 
-// What the agent is part-way through: its thinking and reply as they are written, and the
-// file or tool call it is composing. Redrawn on every update and replaced by the finished item.
+function fileOf(name, inp) {
+  const path = inp.file_path || inp.file;
+  if (!path || !["Write", "Edit", "run_program", "assemble", "debug_program"].includes(name)) return null;
+  const b = base(path);
+  return /\.(bas|asm|inc)$/i.test(b) ? b : null;
+}
+
+// What the agent is part-way through: its reply as it is written, and the call it is composing
+// (one pulsing yellow row: "WRITING primes.bas"). Redrawn on every update and replaced by the finished item.
 const liveBox = el("div", "live");
 function showLive(blocks) {
   liveBox.replaceChildren();
   for (const b of blocks) {
     if (b.kind === "tool") {
-      const box = el("div", "msg writing");
-      box.append(el("div", "label", (b.name || "tool") + "  ·  writing"));
+      const file = (/"(?:file_path|file)"\s*:\s*"([^"]*)"/.exec(b.text) || [])[1];
+      const label = ["Write", "Edit"].includes(b.name) ? "WRITING " + (base(file) || "") :
+        b.name === "run_program" ? "RUNNING " + (file || "") : (b.name || "tool").replace(/_/g, " ");
+      const step = makeStep(b.name || "tool", {}, null);
+      step.el.querySelector(".lbl").textContent = label;
+      lastStepLabel = label;
       // The arguments arrive as unfinished JSON; show the file text inside it as text.
       const m = /"(?:content|new_string)"\s*:\s*"/.exec(b.text);
-      const body = (m ? b.text.slice(m.index + m[0].length) : b.text)
-        .replace(/\\n/g, "\n").replace(/\\"/g, '"').replace(/\\\\/g, "\\");
-      if (body.trim()) box.append(el("pre", "", body.split("\n").slice(-14).join("\n")));
-      liveBox.append(box);
-    } else if (b.text.trim()) {
-      liveBox.append(el("div", "msg " + b.kind, b.text));
+      const body = (m ? b.text.slice(m.index + m[0].length) : b.text).replace(/\\n/g, "\n").replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+      step.body.replaceChildren(el("pre", "", body.split("\n").slice(-14).join("\n")));
+      const wrap = el("div", "steps"); wrap.append(step.el);
+      liveBox.append(wrap);
+    } else if (b.kind === "text" && b.text.trim()) {
+      liveBox.append(el("div", "msg text", b.text));
     } else if (b.kind === "thinking") {
-      liveBox.append(el("div", "msg thinking", "Thinking"));  // the model does not always share the words
+      liveBox.append(el("div", "msg thinking", b.text.trim() || "…"));
     }
   }
   if (liveBox.childElementCount) log.append(liveBox); else liveBox.remove();
 }
 
+// -- runs this session: a picture of the screen at the end of each of the agent's runs ----------
+let runs = [], viewingRun = null;
+function addRun(step, report, ok, frame) {
+  runs.push({ n: runs.length + 1, report, ok, frame, step });
+  drawRuns();
+}
+function drawRuns() {
+  $("runs").hidden = !runs.length;
+  const fixes = runs.filter((r, i) => r.ok && i > 0 && !runs[i - 1].ok).length;
+  $("runCount").textContent = runs.length + (runs.length === 1 ? " run" : " runs") + (fixes ? " · " + fixes + (fixes === 1 ? " fix" : " fixes") : "");
+  const strip = $("runStrip");
+  strip.replaceChildren();
+  runs.forEach((r, i) => {
+    const latest = i === runs.length - 1;
+    const b = el("button", "run " + (r.ok ? "good" : "bad") + (viewingRun === r.n || (viewingRun === null && latest) ? " on" : latest ? "" : " past"));
+    const pic = el("div", "pic");
+    if (r.frame) { const img = el("img"); img.src = r.frame; img.alt = "Run " + r.n; pic.append(img); }
+    b.append(pic, el("span", "cap", r.report));
+    b.title = "Run " + r.n + ": " + r.report;
+    b.onclick = () => viewRun(r);
+    b.onmouseenter = () => r.step.el.classList.add("hl");
+    b.onmouseleave = () => r.step.el.classList.remove("hl");
+    strip.append(b);
+  });
+  if (running) {
+    const next = el("div", "run next"); next.append(el("div", "pic", "next…"));
+    strip.append(next);
+  }
+  strip.scrollLeft = strip.scrollWidth;
+}
+function viewRun(r) {
+  if (!r.frame) return notice("There is no picture of that run.");
+  viewingRun = r.n;
+  $("runFrame").src = r.frame; $("runFrame").hidden = false; $("tv").hidden = true; $("tvOff").hidden = true;
+  $("backLive").hidden = false;
+  showReport(r.report, r.ok);
+  r.step.el.scrollIntoView({ block: "nearest" });
+  drawRuns();
+}
+$("backLive").onclick = () => {
+  viewingRun = null;
+  $("runFrame").hidden = true; $("backLive").hidden = true;
+  $("tv").hidden = !$("tv").src; $("tvOff").hidden = !!$("tv").src;
+  const last = runs[runs.length - 1];
+  if (last) showReport(last.report, last.ok);
+  drawRuns();
+};
+function showReport(report, ok) {
+  $("lastReport").hidden = !report;
+  $("lastReport").textContent = "● " + (report && !report.startsWith("(") ? report : "no report");
+  $("lastReport").className = "report " + (ok ? "good" : "bad");
+}
+
+// -- the project rail ---------------------------------------------------------------------------
+const RAIL_MAX = 8;
+let railing = null;
+function loadRail() {
+  railing = railing || (async () => {
+    try {
+      const data = await (await fetch("/api/projects")).json();
+      const rail = $("rail");
+      rail.replaceChildren();
+      for (const p of data.projects.slice(0, RAIL_MAX)) {
+        const b = el("button", "thumb" + (p.id === data.current ? " current" : ""));
+        b.title = p.name + " · " + ago(p.updated) + (p.cost ? " · $" + p.cost.toFixed(2) : "");
+        b.setAttribute("aria-label", p.name);
+        if (p.thumb) { const img = el("img"); img.src = "/api/thumb?id=" + p.id + "&t=" + p.updated; img.alt = ""; b.append(img); }
+        else b.textContent = p.name.split(/\s+/)[0].slice(0, 6);
+        b.onclick = () => p.id === data.current || post("/api/project/open", { id: p.id }).catch(tell);
+        rail.append(b);
+      }
+    } catch (err) { /* the rail is a convenience: try again on the next change */ }
+  })().finally(() => { railing = null; });
+  return railing;
+}
+
+// -- updates from the server ------------------------------------------------------------------------
 // Everything the page shows of the agent comes on one long response, a frame of JSON each time
 // something changes: new events, then the status, the reply being written, budget, project and files.
+let replaying = false;
 function update(data) {
-  if (data.generation !== generation) {  // another project (or the first load): start the page again
-    generation = data.generation; after = 0; tools = {};
+  replaying = data.generation !== generation;
+  if (replaying) {  // another project (or the first load): start the page again
+    generation = data.generation; after = 0; steps = {}; group = null; explainNext = null;
+    runs = []; viewingRun = null; $("backLive").hidden = true; $("runFrame").hidden = true; drawRuns(); $("lastReport").hidden = true;
     currentFile = null; pinned = false; fileStamp = {}; edit(false);
     $("tv").hidden = true; $("tvOff").hidden = false;
     showEmpty();
+    loadRail();
   }
-  $("projectName").textContent = data.project ? "·  " + data.project.name : "";
-  shareLink = data.project ? data.project.share : null;
-  $("adminLink").hidden = !(data.project && data.project.admin);
-  $("shareBtn").className = "small" + (shareLink ? " on" : "");
+  project = data.project;
+  if (project && document.activeElement !== $("projectRename")) $("projectName").textContent = project.name;
+  shareLink = project ? project.share : null;
+  $("shareLive").hidden = !shareLink;
+  $("adminLink").hidden = !(project && project.admin);
+  if (project && project.email) {
+    const parts = project.email.split("@")[0].split(/[._-]+/).filter(Boolean);
+    $("avatar").textContent = (parts.length > 1 ? parts[0][0] + parts[1][0] : project.email.slice(0, 2)).toUpperCase();
+    $("who").textContent = project.email;
+  }
+  liveBox.remove();
   const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
   for (const e of data.events) { addEvent(e); after = e.n + 1; }
   showLive(data.live || []);
   if ((data.events.length || (data.live || []).length) && atBottom) log.scrollTop = log.scrollHeight;
-  running = data.running; started = data.started;
+  const wasRunning = running;
+  running = data.running; started = data.started; busyText = data.busy || "";
+  if (running !== wasRunning) drawRuns();
   showStatus();
   $("stop").hidden = !running;
   $("send").textContent = running ? "Queue" : "Send";
-  $("busy").textContent = data.busy || "";
+  if (!attachment) input.placeholder = running ? QUEUE_PLACEHOLDER : PLACEHOLDER;
+  $("busy").textContent = busyText;
   showBudget(data.budget);
   const listed = JSON.stringify(data.files || []);
   if (listed !== filesJson || filesDirty) { filesJson = listed; shownFiles = data.files || []; files(); }
 }
 
-function showStatus() {
-  $("status").className = "status" + (running ? " working" : "");
-  $("statusText").textContent = running ? "Working  ·  " + Math.round(Date.now() / 1000 - started) + " s" : "Idle";
+function showStatus(state) {
+  const pill = $("status");
+  if (state === "asleep" || state === "unreachable") {
+    pill.className = "pill " + state;
+    $("statusText").textContent = state === "asleep" ? "Asleep — wakes on send" : "Server not reachable";
+    return;
+  }
+  pill.className = "pill" + (running ? " working" : "");
+  const what = (busyText || lastStepLabel || "").toLowerCase();
+  $("statusText").textContent = running
+    ? "Working" + (what ? " · " + what : "") + " · " + Math.max(0, Math.round(Date.now() / 1000 - started)) + " s" : "Idle";
 }
 setInterval(() => { if (running && connected) showStatus(); }, 1000);
 
@@ -505,11 +850,27 @@ async function follow() {
       await readFrames(r, frame => update(JSON.parse(new TextDecoder().decode(frame))), () => true);
     } catch (err) { /* said below */ }
     connected = false;
-    $("status").className = "status";
-    $("statusText").textContent = asleep ? "Asleep. It starts again when you send a message." : "Server not reachable";
+    showStatus(asleep ? "asleep" : "unreachable");
     await pause(1500);
   }
 }
+
+// -- the top bar ---------------------------------------------------------------------------------
+// Renaming the project: click its name.
+$("projectName").onclick = () => {
+  $("projectRename").value = $("projectName").textContent;
+  $("projectName").hidden = true; $("projectRename").hidden = false; $("projectRename").select();
+};
+async function rename(save) {
+  const name = $("projectRename").value.trim();
+  $("projectRename").hidden = true; $("projectName").hidden = false;
+  if (save && name && name !== $("projectName").textContent) {
+    $("projectName").textContent = name;
+    try { await post("/api/project/rename", { name }); loadRail(); } catch (err) { tell(err); }
+  }
+}
+$("projectRename").onkeydown = ev => { if (ev.key === "Enter") rename(true); if (ev.key === "Escape") rename(false); };
+$("projectRename").onblur = () => rename(true);
 
 // Hosted, each person has a budget that requests are paid from; it is brought up to date as each one finishes.
 function showBudget(budget) {
@@ -519,26 +880,36 @@ function showBudget(budget) {
   $("budgetLeft").textContent = "$" + left.toFixed(2);
   $("budgetBar").style.width = Math.min(100, 100 * left / Math.max(budget.granted, 0.01)) + "%";
   $("budget").className = "budget" + (left <= 0 ? " out" : left < 1 ? " low" : "");
+  $("topup").hidden = left > 0;
   const amounts = $("amounts");
   if (!amounts.childElementCount) {
     for (const amount of budget.top_ups) {
-      const b = el("button", "small", "+ $" + amount);
-      b.onclick = async () => {
+      const b = el("button", "", "+ $" + amount);
+      b.onclick = async ev => {
+        ev.stopPropagation();
         amounts.hidden = true;
-        try {
-          const r = await fetch("/api/topup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ amount }) });
-          const data = await r.json();
-          if (!r.ok) throw new Error(data.error || r.statusText);
-          showBudget(data.budget);
-        } catch (err) { notice(err.message); }
+        try { showBudget((await post("/api/topup", { amount })).budget); } catch (err) { tell(err); }
       };
       amounts.append(b);
     }
   }
 }
-$("topup").onclick = ev => { ev.stopPropagation(); $("amounts").hidden = !$("amounts").hidden; };
-document.addEventListener("click", () => { $("amounts").hidden = true; });
+$("budget").onclick = ev => { ev.stopPropagation(); $("amounts").hidden = !$("amounts").hidden; };
+document.addEventListener("click", () => { $("amounts").hidden = true; $("avatarMenu").hidden = true; $("seg").classList.remove("open"); });
 
+// The avatar's menu: who you are, the admin page (administrators), projects and memory.
+$("avatar").onclick = ev => {
+  ev.stopPropagation();
+  const menu = $("avatarMenu"), r = $("avatar").getBoundingClientRect();
+  menu.hidden = !menu.hidden;
+  menu.style.left = (r.right + 8) + "px"; menu.style.top = "auto"; menu.style.bottom = (innerHeight - r.bottom) + "px";
+  if (innerWidth <= 900) { menu.style.left = "auto"; menu.style.right = "8px"; menu.style.bottom = "auto"; menu.style.top = (r.bottom + 8) + "px"; }
+};
+addEventListener("resize", () => { $("avatarMenu").hidden = true; });
+$("menuProjects").onclick = () => $("projects").click();
+$("menuMemory").onclick = () => $("memoryBtn").click();
+
+// -- the composer --------------------------------------------------------------------------------
 // A picture to send with the request. It is shrunk here first: the agent needs no more than
 // about 1500 pixels a side, and a phone photo is several times that.
 let attachment = null;
@@ -563,7 +934,7 @@ $("pick").onchange = async () => {
 };
 function unattach() {
   attachment = null; $("attached").hidden = true;
-  input.placeholder = "What should it build?  e.g. a bouncing ball that leaves a rainbow trail";
+  input.placeholder = running ? QUEUE_PLACEHOLDER : PLACEHOLDER;
 }
 $("unattach").onclick = unattach;
 
@@ -575,7 +946,12 @@ async function send() {
   try { if (asleep) await awake(); await post("/api/message", body); running = true; unattach(); }
   catch (err) { input.value = text; notice(err.message); }
 }
+$("form").onsubmit = ev => { ev.preventDefault(); send(); };
+input.onkeydown = ev => { if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); send(); } };
+input.oninput = () => { input.style.height = ""; input.style.height = Math.min(input.scrollHeight, 160) + "px"; };
+$("stop").onclick = () => post("/api/stop").catch(tell);
 
+// -- the sheets ----------------------------------------------------------------------------------
 // Projects: each has its own chat, programs and place in the library.
 $("reset").onclick = () => post("/api/project/new").catch(tell);
 $("closeLibrary").onclick = () => { $("library").hidden = true; };
@@ -585,17 +961,17 @@ $("projects").onclick = async () => {
     const data = await (await fetch("/api/projects")).json();
     const cards = $("cards");
     cards.replaceChildren();
-    for (const project of data.projects) {
-      const card = el("button", "card" + (project.id === data.current ? " current" : ""));
-      const shot = el("div", "shot", project.thumb ? undefined : "no picture yet");
-      if (project.thumb) { const img = el("img"); img.src = "/api/thumb?id=" + project.id + "&t=" + project.updated; shot.append(img); }
+    for (const p of data.projects) {
+      const card = el("button", "card" + (p.id === data.current ? " current" : ""));
+      const shot = el("div", "shot", p.thumb ? undefined : "no picture yet");
+      if (p.thumb) { const img = el("img"); img.src = "/api/thumb?id=" + p.id + "&t=" + p.updated; shot.append(img); }
       const what = el("div", "what");
-      what.append(el("b", "", project.name),
-        el("span", "", new Date(project.updated * 1000).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })
-          + (project.cost ? "  ·  $" + project.cost.toFixed(2) : "")),
-        el("span", "", project.files.length ? project.files.join(", ") : "no programs yet"));
+      what.append(el("b", "", p.name),
+        el("span", "", new Date(p.updated * 1000).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })
+          + (p.cost ? "  ·  $" + p.cost.toFixed(2) : "")),
+        el("span", "", p.files.length ? p.files.join(", ") : "no programs yet"));
       card.append(shot, what);
-      card.onclick = () => post("/api/project/open", { id: project.id }).then(() => { $("library").hidden = true; }, tell);
+      card.onclick = () => post("/api/project/open", { id: p.id }).then(() => { $("library").hidden = true; }, tell);
       cards.append(card);
     }
     $("library").hidden = false;
@@ -635,9 +1011,9 @@ async function showVersion(version, name) {
   ]);
   const pre = $("versionText");
   pre.replaceChildren();
-  const lines = now === null ? then.split("\n").map(text => ({ text, kind: "" })) : lineDiff(then, now);
-  for (const line of lines) pre.append(line.kind ? el("span", line.kind, line.text || " ") : line.text + "\n");
-  const changed = lines.filter(l => l.kind).length;
+  const shown = now === null ? then.split("\n").map(text => ({ text, kind: "" })) : lineDiff(then, now);
+  for (const line of shown) pre.append(line.kind ? el("span", line.kind, line.text || " ") : line.text + "\n");
+  const changed = shown.filter(l => l.kind).length;
   $("versionNote").textContent = now === null ? name + " is not in the project now"
     : changed ? "Green: in this version.  Red: in the program now." : "Same as the program now.";
   $("restore").hidden = false;
@@ -685,10 +1061,10 @@ function showShare() {
 }
 $("shareBtn").onclick = () => { showShare(); $("shareSheet").hidden = false; };
 $("shareGo").onclick = async () => {
-  try { shareLink = (await post("/api/share")).link; showShare(); } catch (err) { tell(err); }
+  try { shareLink = (await post("/api/share")).link; $("shareLive").hidden = false; showShare(); } catch (err) { tell(err); }
 };
 $("shareStop").onclick = async () => {
-  try { await post("/api/share/stop"); shareLink = null; showShare(); } catch (err) { tell(err); }
+  try { await post("/api/share/stop"); shareLink = null; $("shareLive").hidden = true; showShare(); } catch (err) { tell(err); }
 };
 $("shareCopy").onclick = () => navigator.clipboard.writeText($("shareLink").href).then(() => notice("Link copied."), tell);
 $("closeShare").onclick = () => { $("shareSheet").hidden = true; };
@@ -702,7 +1078,7 @@ function showNotes(notes) {
     : "Nothing yet. The agent notes things worth knowing next time, such as your preferences, and they will show here."));
   notes.forEach((note, i) => {
     const row = el("div", "note");
-    const b = el("button", "small", "Forget");
+    const b = el("button", "", "Forget");
     b.onclick = () => post("/api/memory/forget", { number: i + 1 }).then(data => showNotes(data.notes), tell);
     row.append(el("span", "", note.text),
       el("small", "", new Date(note.at * 1000).toLocaleDateString([], { dateStyle: "medium" })), b);
@@ -716,11 +1092,7 @@ $("memoryBtn").onclick = async () => {
 $("closeMemory").onclick = () => { $("memory").hidden = true; };
 $("memory").onclick = ev => { if (ev.target === $("memory")) $("memory").hidden = true; };
 
-$("form").onsubmit = ev => { ev.preventDefault(); send(); };
-input.onkeydown = ev => { if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); send(); } };
-input.oninput = () => { input.style.height = ""; input.style.height = Math.min(input.scrollHeight + 2, 160) + "px"; };
-$("stop").onclick = () => post("/api/stop").catch(tell);
-
+// -- the Spectrum ---------------------------------------------------------------------------------
 // The emulator's screen and sound each arrive as one long response made of frames: a 4-byte
 // length, then that many bytes (an empty frame now and then shows the connection is alive).
 // Reads frames until the response ends or wanted() says stop. Takes an address or a response.
@@ -749,7 +1121,7 @@ const seen = { frames: 0, bytes: 0 };   // for the stats read-out
 function showFrame(png) {
   const tv = $("tv"), old = tv.src;
   tv.src = URL.createObjectURL(new Blob([png], { type: "image/png" }));
-  tv.hidden = false; $("tvOff").hidden = true;
+  if (viewingRun === null) { tv.hidden = false; $("tvOff").hidden = true; }
   seen.frames += 1; seen.bytes += png.length;
   if (old) setTimeout(() => URL.revokeObjectURL(old), 1000);
 }
@@ -766,10 +1138,11 @@ async function screen() {
 // Sound: the first frame says what the samples are, the rest are the samples; silence is not sent.
 // Each piece is queued to play straight after the one before, a little behind real time.
 let sound = null;
-$("soundBtn").onclick = async () => {
-  if (sound) { sound.close(); sound = null; $("soundBtn").textContent = "Sound off"; $("soundBtn").className = "small"; return; }
+$("soundBtn").onclick = async ev => {
+  ev.stopPropagation();
+  if (sound) { sound.close(); sound = null; $("soundBtn").classList.remove("on"); return; }
   const audio = sound = new AudioContext();
-  $("soundBtn").textContent = "Sound on"; $("soundBtn").className = "small on";
+  $("soundBtn").classList.add("on");
   while (sound === audio) {
     let format = null, due = 0;
     try {
@@ -795,16 +1168,20 @@ $("soundBtn").onclick = async () => {
 };
 
 $("resetBtn").onclick = () => post("/api/reset").catch(tell);
+$("viewBtn").onclick = ev => { ev.stopPropagation(); $("seg").classList.toggle("open"); };
 
-// Typing on the Spectrum: click its screen, then keys go to the emulator until you click away.
+// Typing on the Spectrum: click its screen (or Keyboard), then keys go to the emulator until you click away.
 const KEYS = { " ": ["SPACE"], Enter: ["ENTER"], Shift: ["CAPS_SHIFT"], Control: ["SYMBOL_SHIFT"], Escape: ["CAPS_SHIFT", "SPACE"],
   Backspace: ["CAPS_SHIFT", "0"], ArrowLeft: ["CAPS_SHIFT", "5"], ArrowDown: ["CAPS_SHIFT", "6"], ArrowUp: ["CAPS_SHIFT", "7"],
   ArrowRight: ["CAPS_SHIFT", "8"] };
+const HINT = "Click to type on the Spectrum", HINT_ON = "Typing goes to the Spectrum  ·  Shift = CAPS SHIFT, Ctrl = SYMBOL SHIFT, Esc = BREAK  ·  click elsewhere to stop";
 const held = new Map();
 let keyLine = Promise.resolve();        // one at a time, so a key never comes up before it went down
 function sendKeys(keys, down) {
   keyLine = keyLine.then(() => post("/api/keys", { keys, down })).catch(() => {});
 }
+$("keysBtn").onclick = ev => { ev.stopPropagation(); if (document.activeElement === $("tvBox")) $("tvBox").blur(); else $("tvBox").focus(); };
+$("keysBtn").onmousedown = ev => ev.preventDefault();   // keep the screen's focus when switching it off
 $("tvBox").onkeydown = ev => {
   if (ev.altKey || ev.metaKey) return;
   const keys = KEYS[ev.key] || (/^[a-z0-9]$/i.test(ev.key) ? [ev.key.toUpperCase()] : null);
@@ -817,18 +1194,19 @@ $("tvBox").onkeyup = ev => {
   const keys = held.get(ev.code);
   if (keys) { held.delete(ev.code); sendKeys(keys, false); ev.preventDefault(); }
 };
-$("tvBox").onfocus = () => { $("keyHint").hidden = false; };
+$("tvBox").onfocus = () => { $("keyHint").textContent = HINT_ON; $("keysBtn").classList.add("on"); };
 $("tvBox").onblur = () => {
-  $("keyHint").hidden = true;
+  $("keyHint").textContent = HINT; $("keysBtn").classList.remove("on");
   for (const keys of held.values()) sendKeys(keys, false);
   held.clear();
 };
 
 // Stats: what the page measures itself (frames, data, round trip) and what the server reports.
 let statsTimer = null;
-$("statsBtn").onclick = () => {
+$("statsBtn").onclick = ev => {
+  ev.stopPropagation();
   const on = !statsTimer;
-  $("stats").hidden = !on; $("statsBtn").className = on ? "small on" : "small";
+  $("stats").hidden = !on; $("statsBtn").classList.toggle("on", on);
   if (!on) { clearInterval(statsTimer); statsTimer = null; return; }
   let last = { ...seen, at: performance.now() };
   const show = async () => {
@@ -836,39 +1214,42 @@ $("statsBtn").onclick = () => {
     let server = {};
     try { server = await (await fetch("/api/stats")).json(); } catch (err) {}
     const now = performance.now(), took = (now - last.at) / 1000;
-    const lines = [
+    const out = [
       "screen     " + ((seen.frames - last.frames) / took).toFixed(1) + " frames/s",
       "data       " + ((seen.bytes - last.bytes) / took / 1024).toFixed(1) + " KB/s",
       "round trip " + Math.round(now - asked) + " ms",
     ];
-    if (server.memory_total_mb) lines.push(
+    if (server.memory_total_mb) out.push(
       "memory     " + server.memory_used_mb + " of " + server.memory_total_mb + " MB",
       "load       " + server.load.toFixed(2) + " on " + server.cores + " cores");
-    if (server.emulator_mb) lines.push("emulator   " + (server.emulator_cpu ?? "?") + "% cpu, " + server.emulator_mb + " MB");
-    if (server.sessions) lines.push("people     " + server.sessions + " here, " + server.working + " working");
-    $("stats").textContent = lines.join("\n");
+    if (server.emulator_mb) out.push("emulator   " + (server.emulator_cpu ?? "?") + "% cpu, " + server.emulator_mb + " MB");
+    if (server.sessions) out.push("people     " + server.sessions + " here, " + server.working + " working");
+    $("stats").textContent = out.join("\n");
     last = { ...seen, at: now };
   };
   show(); statsTimer = setInterval(show, 2000);
 };
 
+// -- the program ------------------------------------------------------------------------------------
 function highlight(text, name) {
   const pre = $("source");
   pre.replaceChildren();
   const basic = /\.bas$/i.test(name);
-  for (const line of text.split(/\r?\n/)) {
+  for (const line of text.replace(/\n$/, "").split(/\r?\n/)) {
+    const row = el("span", "ln");
     if (basic) {
-      const m = /^(\s*)(\d+)(\s?)(.*)$/.exec(line);
-      if (line.trimStart().startsWith("#")) pre.append(el("span", "rem", line));
+      const m = /^\s*(\d+)\s?(.*)$/.exec(line);
+      if (line.trimStart().startsWith("#")) { row.append(el("span", "num", ""), el("span", "rem", line)); }
       else if (m) {
-        pre.append(m[1], el("span", "num", m[2]), m[3]);
-        for (const part of m[4].split(/("[^"]*"?)/)) pre.append(part.startsWith('"') ? el("span", "str", part) : part);
-      } else pre.append(line);
+        row.append(el("span", "num", m[1]));
+        for (const part of m[2].split(/("[^"]*"?)/)) row.append(part.startsWith('"') ? el("span", "str", part) : part);
+      } else row.append(el("span", "num", ""), line);
     } else {
+      row.classList.add("plain");
       const i = line.indexOf(";");
-      if (i >= 0) pre.append(line.slice(0, i), el("span", "rem", line.slice(i))); else pre.append(line);
+      if (i >= 0) row.append(line.slice(0, i), el("span", "rem", line.slice(i))); else row.append(line || " ");
     }
-    pre.append("\n");
+    pre.append(row);
   }
 }
 
@@ -876,12 +1257,16 @@ function highlight(text, name) {
 let editing = false, shownText = "";
 function edit(on, text) {
   editing = on;
-  $("editor").hidden = !on; $("source").hidden = on; $("saveFile").hidden = !on;
+  $("editor").hidden = !on; $("source").hidden = on || !currentFile;
+  $("saveFile").hidden = !on; $("runFile").hidden = on;
   $("editFile").textContent = on ? "Cancel" : "Edit";
-  if (on) { $("editor").value = text; $("editor").focus(); } else { fileStamp = {}; filesDirty = true; files(); }
+  if (on) { $("programEmpty").hidden = true; $("editor").value = text; $("editor").focus(); }
+  else { fileStamp = {}; filesDirty = true; files(); }
 }
 $("editFile").onclick = () => { if (editing) edit(false); else if (currentFile) edit(true, shownText); };
-$("newFile").onclick = () => { $("newName").hidden = false; $("newName").value = ""; $("newName").focus(); };
+const askName = () => { $("newName").hidden = false; $("newName").value = ""; $("newName").focus(); };
+$("newFile").onclick = askName;
+$("newProgram").onclick = askName;
 $("newName").onkeydown = ev => {
   if (ev.key === "Escape") $("newName").hidden = true;
   if (ev.key !== "Enter") return;
@@ -892,9 +1277,11 @@ $("newName").onkeydown = ev => {
   edit(true, name.endsWith(".bas") ? "10 REM " + name.replace(/\.bas$/, "") + "\n20 PRINT \"hello\"\n" : "");
 };
 async function run(name) {
+  $("fileNote").textContent = "running…";
   const data = await post("/api/run", { name });
-  const report = /^report: (.*)$/m.exec(data.screen || "");
-  $("fileNote").textContent = report && !report[1].startsWith("(") ? report[1] : "running";
+  const report = (/^report: (.*)$/m.exec(data.screen || "") || [])[1];
+  $("fileNote").textContent = "";
+  if (report && !report.startsWith("(")) showReport(report, reportOk(report));
 }
 $("saveFile").onclick = async () => {
   try {
@@ -903,7 +1290,7 @@ $("saveFile").onclick = async () => {
     if (currentFile.endsWith(".bas")) await run(currentFile);
   } catch (err) { tell(err); }
 };
-$("runFile").onclick = () => { if (currentFile) run(currentFile).catch(tell); };
+$("runFile").onclick = () => { if (currentFile) run(currentFile).catch(err => { $("fileNote").textContent = ""; tell(err); }); };
 
 async function files() {
   try {
@@ -920,15 +1307,19 @@ async function files() {
       tabs.append(b);
     }
     const now = sources.find(f => f.name === currentFile);
+    $("projectSub").textContent = (now ? now.name + " · " : "") + "128K";
     const stem = currentFile ? currentFile.replace(/\.[^.]+$/, "") : "";
     const tape = list.find(f => f.name === stem + ".tap");
-    if (tape) { const a = el("a", "", "download " + tape.name); a.href = "/api/file?name=" + encodeURIComponent(tape.name); tabs.append(a); }
+    $("tapeLink").hidden = !tape;
+    if (tape) { $("tapeLink").href = "/api/file?name=" + encodeURIComponent(tape.name); $("tapeLink").title = "Download " + tape.name; }
+    $("programEmpty").hidden = !!sources.length;
+    $("source").hidden = !now;
+    $("editFile").disabled = $("runFile").disabled = $("historyBtn").disabled = !now;
     if (now && (fileStamp.name !== now.name || fileStamp.modified !== now.modified)) {
       const text = await (await fetch("/api/file?name=" + encodeURIComponent(now.name))).text();
       highlight(text, now.name); shownText = text;
       fileStamp = { name: now.name, modified: now.modified };
-      $("fileNote").textContent = text.split("\n").filter(l => l.trim()).length + " lines";
-    } else if (!now) { $("source").textContent = currentFile ? "" : "No programs yet."; $("fileNote").textContent = ""; }
+    }
   } catch (err) { filesDirty = true; /* try again with the next update */ }
 }
 
@@ -994,7 +1385,7 @@ function awake() {
         const r = await fetch("/wake");
         if (r.ok && (await r.json()).state === "running" && (await plainFetch("/api/files")).status < 500) return;
       } catch (err) { /* try again */ }
-      $("status").className = "status working";
+      $("status").className = "pill working";
       $("statusText").textContent = "Starting the workbench, about a minute";
       await new Promise(done => setTimeout(done, 3000));
     }
@@ -1005,7 +1396,7 @@ function awake() {
 // The dividers: drag to share the room between the panes; the choice is remembered on this device.
 function divider(bar, name, box, across) {
   const root = document.documentElement.style;
-  const kept = saved.get("specdev_" + name);
+  const kept = saved.get("specdev_pane_" + name);
   if (kept) root.setProperty("--" + name, kept);
   bar.onpointerdown = down => {
     bar.setPointerCapture(down.pointerId);
@@ -1015,16 +1406,16 @@ function divider(bar, name, box, across) {
       const share = across ? (move.clientX - r.left) / r.width : (move.clientY - r.top) / r.height;
       const value = (Math.min(0.85, Math.max(0.15, share)) * 100).toFixed(1) + "%";
       root.setProperty("--" + name, value);
-      saved.set("specdev_" + name, value);
+      saved.set("specdev_pane_" + name, value);
     };
     bar.onpointerup = bar.onpointercancel = () => {
       bar.onpointermove = null;
       bar.classList.remove("dragging"); document.body.classList.remove("resizing");
     };
   };
-  bar.ondblclick = () => { root.removeProperty("--" + name); saved.set("specdev_" + name, null); };
+  bar.ondblclick = () => { root.removeProperty("--" + name); saved.set("specdev_pane_" + name, null); };
 }
-divider($("splitChat"), "chat", document.querySelector("main"), true);
+divider($("splitChat"), "chat", document.querySelector(".content"), true);
 divider($("splitTv"), "tv", document.querySelector(".right"), false);
 
 async function start() {
@@ -1039,7 +1430,7 @@ async function start() {
   }
   if (auth) await awake();
   showEmpty();
-  follow(); screen();
+  follow(); screen(); loadRail();
 }
 start();
 </script>

@@ -6,8 +6,8 @@ What the page offers beyond "type a request", and how it is stored.
 
 A **project** is one piece of work: its program files, its conversation with the agent, and a little metadata. Everything a person does happens in their current project.
 
-- **New project** (replaces "New conversation") starts an empty project and makes it current. The empty chat shows **four suggestions picked at random** from a pool of about thirty; they change every time.
-- A project is named after its first request (first 48 characters) until then it is "New project".
+- **+** in the project rail (the column of project pictures down the left of the page) starts an empty project and makes it current. The empty chat shows **four suggestions picked at random** from a pool of about thirty; they change every time.
+- A project is named after its first request (first 48 characters); until then it is "New project". Clicking the name in the top bar renames it.
 - **Opening a project** from the library restores its chat history on the page, gives the agent its memory of that conversation back (the agent session is resumed), and **loads the project's program into the emulator** (the last program that was run in it), so it is on screen ready to use or change.
 - Projects cannot be switched while the agent is working (the page says so).
 - The conversation is kept on disk, so it also survives a restart or deploy of the service.
@@ -30,7 +30,7 @@ projects/<id>/history.jsonl, history/<n>/   earlier versions of the source files
 
 Hosted, every project is copied to `s3://<bucket>/library/<person>/<project id>/...` when a request finishes, when a file is saved by hand and when an image is uploaded. S3 is the library of record; the instance's disk is the working copy. If a person has no projects on the instance (a new or rebuilt instance) their library is fetched back from S3 the first time they appear.
 
-The page's **Projects** button lists the library, newest first, as cards: screen thumbnail, name, when it was last changed, its program files and what it has cost. Clicking a card opens that project (see above), which is both "run it again" and "carry on working on it".
+The project rail shows the eight most recent projects (click one to open it); its **See all** lists the library, newest first, as cards: screen thumbnail, name, when it was last changed, its program files and what it has cost. Clicking a card opens that project (see above), which is both "run it again" and "carry on working on it".
 
 ## Writing programs by hand
 
@@ -67,6 +67,8 @@ GET  /api/projects                 {current, projects: [{id, name, updated, file
 GET  /api/thumb?id=ID              a project's thumbnail
 POST /api/project/new              start a project and make it current
 POST /api/project/open {id}        make a project current; restores chat, loads its program
+POST /api/project/rename {name}    rename the current project
+GET  /api/run-frame?project=P&id=I the screen at the end of one of the agent's runs (the page's strip of runs)
 POST /api/file {name, text}        save a source file in the current project
 POST /api/run {name}               run a program from the current project now
 POST /api/message {text, image?, kind?}    image = {type, data (base64)}; kind = "listing" | "picture"

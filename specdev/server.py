@@ -64,6 +64,7 @@ ACTIVITY = os.environ.get("SPECDEV_ACTIVITY", "")             # touched while in
 ADMINS = {a.strip().lower() for a in os.environ.get("SPECDEV_ADMINS", "").split(",") if a.strip()}
 POOL_ADMIN = admin.Pool(POOL) if POOL else None
 
+RUN_ID = re.compile(r"[A-Za-z0-9_-]{6,80}")       # a tool use id, which names a run's saved frame
 SHARES = Shares(DATA / "shared", BUCKET)        # everyone's share links; hosted, served from the bucket
 SHARED_NAME = re.compile(r"[A-Za-z0-9_-]{8,40}\.(html|tap|bas|asm|inc)")
 PLAYER_NAME = re.compile(r"[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)*\.[a-z0-9.]+|COPYING")
@@ -131,7 +132,8 @@ class Workspace:
         project = self.library.current
         self.bench = workbench.Bench(project.programs, home=self.home)
         self.session = Session(self.bench, gate=self._gate, on_done=self._record, on_event=self._keep,
-                               events=project.events(), resume=project.meta["session"], memory=self.memory)
+                               events=project.events(), resume=project.meta["session"], memory=self.memory,
+                               on_result=self._run_frame)
         self.edited: set[str] = set()       # files changed by hand since the agent last worked
         self.active = time.time()
         self.asleep = False
@@ -171,6 +173,25 @@ class Workspace:
         return None
 
     # -- the current project ---------------------------------------------------
+
+    def _run_frame(self, tool: str, tool_id: str) -> dict | None:
+        """Keep the screen a run ended on, so the page can show it in its strip of runs (even after a reload)."""
+        png = self.bench.last_png if tool in ("run_program", "debug_program") else None
+        if not png or not RUN_ID.fullmatch(tool_id):
+            return None
+        project = self.library.current
+        (project.folder / "runs").mkdir(exist_ok=True)
+        (project.folder / "runs" / f"{tool_id}.png").write_bytes(png)
+        return {"frame": f"/api/run-frame?project={project.id}&id={tool_id}"}
+
+    def rename(self, name: str) -> None:
+        name = " ".join(str(name).split())[:48]
+        if not name:
+            raise Refused("Give the project a name.")
+        project = self.library.current
+        project.meta.update(name=name, updated=time.time())
+        project.save()
+        self.library.publish(project)
 
     def _keep(self, event: dict) -> None:
         self.library.current.add_event({k: v for k, v in event.items() if k != "n"})
@@ -288,7 +309,7 @@ class Workspace:
         project = self.library.current
         shared = project.meta.get("share")
         return {"id": project.id, "name": project.meta["name"], "share": f"/play/{shared}.html" if shared else None,
-                "admin": self.is_admin}
+                "admin": self.is_admin, "email": self.email}
 
     def share(self) -> str:
         """Put the project's program up at a link anyone can open; return the link's path."""
@@ -624,6 +645,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, ws.files())
             if url.path == "/api/projects":
                 return self._json(200, {"current": ws.library.current.id, "projects": ws.library.summaries()})
+            if url.path == "/api/run-frame":
+                project = ws.library.projects.get(query.get("project", ""))
+                ident = query.get("id", "")
+                if project and RUN_ID.fullmatch(ident) and (project.folder / "runs" / f"{ident}.png").is_file():
+                    return self._send(200, (project.folder / "runs" / f"{ident}.png").read_bytes(), "image/png")
             if url.path == "/api/thumb":
                 project = ws.library.projects.get(query.get("id", ""))
                 if project and (project.folder / "thumb.png").is_file():
@@ -747,6 +773,8 @@ class Handler(BaseHTTPRequestHandler):
                 ws.session.stop()
             elif path == "/api/project/new":
                 ws.switch(None)
+            elif path == "/api/project/rename":
+                ws.rename(str(body.get("name", "")))
             elif path == "/api/project/open":
                 ws.switch(str(body.get("id", "")))
             elif path == "/api/file":

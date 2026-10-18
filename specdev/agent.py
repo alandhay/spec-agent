@@ -223,9 +223,12 @@ class Session:
                  on_done: Callable[[dict], None] | None = None,
                  on_event: Callable[[dict], None] | None = None,
                  events: list[dict] | None = None, resume: str | None = None,
-                 memory: Memory | None = None) -> None:
+                 memory: Memory | None = None,
+                 on_result: Callable[[str, str], dict | None] | None = None) -> None:
         self.bench = bench
         self.memory = memory
+        self._on_result = on_result         # (tool name, tool use id) -> more fields for that result's event
+        self._tool_names: dict[str, str] = {}
         self._on_event = on_event           # given every event as it happens, to keep the conversation
         self._gate = gate                   # says why a new request may not start, or None
         self._on_done = on_done             # given a record of each finished request (what, tools, cost)
@@ -445,12 +448,15 @@ class Session:
                     self.emit("thinking", text=block.thinking)
                 elif isinstance(block, ToolUseBlock):
                     self._tools.append(block.name.removeprefix(f"mcp__{SERVER}__"))
+                    self._tool_names[block.id] = block.name.removeprefix(f"mcp__{SERVER}__")
                     self.emit("tool", id=block.id, name=block.name.removeprefix(f"mcp__{SERVER}__"), input=block.input)
         elif isinstance(message, UserMessage) and isinstance(message.content, list):
             for block in message.content:
                 if isinstance(block, ToolResultBlock):
                     text, images = _result_parts(block.content)
-                    self.emit("result", id=block.tool_use_id, text=text, images=images, error=bool(block.is_error))
+                    name = self._tool_names.pop(block.tool_use_id, "")
+                    extra = (self._on_result(name, block.tool_use_id) if self._on_result else None) or {}
+                    self.emit("result", id=block.tool_use_id, text=text, images=images, error=bool(block.is_error), **extra)
         elif isinstance(message, ResultMessage):
             if message.is_error and self._resume and not self._answered and not self._retry:
                 self._retry = True          # see _main: try once more without the saved session

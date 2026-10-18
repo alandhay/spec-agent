@@ -317,6 +317,11 @@ class Bench:
     def _remember(self, img: Image.Image) -> None:
         self._last_png = _png(img)
 
+    @property
+    def last_png(self) -> bytes | None:
+        """The screen as it was last captured (at the end of a run, for instance)."""
+        return self._last_png
+
     def view(self) -> bytes | None:
         """The current screen for the page: never starts the emulator, never waits for a run."""
         emu = self._emu
