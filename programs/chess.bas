@@ -1,0 +1,9 @@
+10 BORDER 0: PAPER 0: INK 7: CLS
+20 PRINT AT 0,11;"CHESSBOARD"
+30 FOR r=0 TO 7
+40 FOR c=0 TO 7
+50 LET p=6: IF (r+c)/2<>INT ((r+c)/2) THEN LET p=1
+60 PRINT AT 3+r*2,8+c*2; PAPER p;"  ";AT 4+r*2,8+c*2; PAPER p;"  "
+70 NEXT c
+80 NEXT r
+90 PRINT AT 20,8;"a b c d e f g h"

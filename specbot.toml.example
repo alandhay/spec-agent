@@ -1,0 +1,31 @@
+# Copy to specbot.toml and adjust. Every field is optional except that the
+# window backend needs window_title or window_class.
+
+backend = "window"          # or "zrcp"
+# rom = "C:/Program Files (x86)/Fuse/roms/48.rom"   # font source for `specbot text`;
+#                           # defaults to roms/48.rom beside launch.path
+
+[window]
+window_title = "Fuse"       # case-insensitive substring of the window title
+# window_class = "Fuse"     # exact window class; use if the title is ambiguous
+capture = "mss"             # or "printwindow" (works when the window is covered)
+crop = [0, 0, 0, 0]         # left, top, right, bottom; run `specbot calibrate`
+native_size = [320, 240]    # optional; omit to keep the raw size
+hold_frames = 3             # frames (20 ms each) to hold each key
+gap_frames = 3              # frames between successive keys
+
+[window.keymap]             # Spectrum key -> host key (pydirectinput names)
+CAPS_SHIFT = "shift"
+SYMBOL_SHIFT = "ctrl"
+
+[zrcp]
+host = "127.0.0.1"
+port = 10000
+# crop, native_size, hold_frames and gap_frames are accepted here too.
+
+# [zrcp.keycodes]           # Spectrum key -> ZEsarUX util_teclas value
+# SYMBOL_SHIFT = 138
+
+# [launch]                  # optional: start the emulator if it is not running
+# path = "C:/Program Files (x86)/Fuse/fuse.exe"
+# args = []

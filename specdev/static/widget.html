@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ZX Spectrum</title>
+<style>
+  /* The live Spectrum, shown inside an assistant's chat (an MCP App). __BASE__ and __SITE__ are filled in by mcp.py. */
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { background: #101114; color: #e8e9ec; font: 14px/1.4 system-ui, "Segoe UI", sans-serif; padding: 10px; }
+  .tv { background: #000; aspect-ratio: 4 / 3; width: 100%; max-width: 640px; margin: 0 auto; position: relative; border-radius: 8px; overflow: hidden; }
+  .tv img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }
+  .tv .off { position: absolute; inset: 0; display: grid; place-items: center; color: #666; font-size: 13px; text-align: center; padding: 0 20px; }
+  .bar { max-width: 640px; margin: 8px auto 0; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .name { flex: 1; min-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #9aa0aa; font-size: 13px; }
+  .name b { color: #e8e9ec; font-weight: 600; }
+  button, a.button { font: inherit; font-size: 13px; border-radius: 6px; padding: 5px 11px; cursor: pointer; border: 1px solid #2c3038;
+    background: #20232a; color: #e8e9ec; text-decoration: none; white-space: nowrap; }
+  a.button.main { background: #ffd400; border-color: #ffd400; color: #111; font-weight: 600; }
+  button.on { border-color: #ffd400; color: #ffd400; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #2c3038; flex: none; }
+  .dot.working { background: #4cc9ff; animation: pulse 1s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .3; } }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="tv"><img id="tv" alt="The Spectrum's screen" hidden><div class="off" id="off">Waiting for the Spectrum&hellip;</div></div>
+<div class="bar">
+  <span class="dot" id="dot"></span>
+  <span class="name" id="name"></span>
+  <button id="sound">Sound off</button>
+  <a class="button" id="tape" target="_blank" rel="noopener" hidden>Download .tap</a>
+  <a class="button main" id="site" target="_blank" rel="noopener" href="__SITE__/">Open in the workbench</a>
+</div>
+<script>
+const BASE = "__BASE__";
+const $ = id => document.getElementById(id);
+const pause = ms => new Promise(done => setTimeout(done, ms));
+
+// Talking to the assistant's app that hosts this frame (MCP Apps): say hello, say how tall we
+// are, and ask it to open links, which a sandboxed frame may not be allowed to do itself.
+let calls = 0;
+const host = (method, params, wantsAnswer = true) => {
+  try { parent.postMessage({ jsonrpc: "2.0", ...(wantsAnswer ? { id: ++calls } : {}), method, params: params || {} }, "*"); } catch (err) {}
+};
+host("ui/initialize", { protocolVersion: "2025-06-18", appInfo: { name: "specdev", version: "1" }, clientInfo: { name: "specdev", version: "1" },
+                        appCapabilities: {}, capabilities: {} });
+host("ui/notifications/initialized", {}, false);
+const sized = () => host("ui/notifications/size-changed", { width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight }, false);
+new ResizeObserver(sized).observe(document.body);
+for (const link of document.querySelectorAll("a.button")) {
+  link.addEventListener("click", () => {
+    if (window.openai && window.openai.openExternal) window.openai.openExternal({ href: link.href });
+    else host("ui/open-link", { url: link.href });
+  });
+}
+
+// Frames: a 4-byte length, then that many bytes (empty frames keep the connection open).
+async function readFrames(url, onFrame, wanted) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error("no stream");
+  const reader = r.body.getReader();
+  let held = new Uint8Array(0);
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return;
+    const joined = new Uint8Array(held.length + value.length);
+    joined.set(held); joined.set(value, held.length); held = joined;
+    while (held.length >= 4) {
+      const size = new DataView(held.buffer, held.byteOffset).getUint32(0);
+      if (held.length < 4 + size) break;
+      if (size) onFrame(held.slice(4, 4 + size));
+      held = held.slice(4 + size);
+    }
+    if (!wanted()) { reader.cancel(); return; }
+  }
+}
+
+(async function screen() {
+  for (;;) {
+    try {
+      if (!document.hidden) await readFrames(BASE + "/screen.stream", png => {
+        let text = "";
+        for (let i = 0; i < png.length; i += 8192) text += String.fromCharCode(...png.subarray(i, i + 8192));
+        $("tv").src = "data:image/png;base64," + btoa(text);
+        $("tv").hidden = false; $("off").hidden = true;
+      }, () => !document.hidden);
+    } catch (err) { $("off").textContent = "The workbench is not reachable. Open it on the website to start it."; }
+    await pause(2000);
+  }
+})();
+
+let sound = null;
+$("sound").onclick = async () => {
+  if (sound) { sound.close(); sound = null; $("sound").textContent = "Sound off"; $("sound").className = ""; return; }
+  const audio = sound = new AudioContext();
+  $("sound").textContent = "Sound on"; $("sound").className = "on";
+  while (sound === audio) {
+    let format = null, due = 0;
+    try {
+      await readFrames(BASE + "/sound.stream", frame => {
+        if (!format) { format = JSON.parse(new TextDecoder().decode(frame)); return; }
+        const samples = new Int16Array(frame.buffer, frame.byteOffset, frame.length >> 1);
+        const piece = audio.createBuffer(1, samples.length, format.rate);
+        const out = piece.getChannelData(0);
+        for (let i = 0; i < samples.length; i++) out[i] = samples[i] / 32768;
+        const source = audio.createBufferSource();
+        source.buffer = piece; source.connect(audio.destination);
+        const now = audio.currentTime;
+        if (due < now + 0.03 || due > now + 0.6) due = now + 0.12;
+        source.start(due); due += piece.duration;
+      }, () => sound === audio && !document.hidden);
+    } catch (err) {}
+    await pause(1000);
+  }
+};
+
+(async function state() {
+  for (;;) {
+    try {
+      const s = await (await fetch(BASE + "/state")).json();
+      $("name").innerHTML = ""; const b = document.createElement("b"); b.textContent = s.name; $("name").append(b, s.running ? "  ·  the agent is working" : "");
+      $("dot").className = "dot" + (s.running ? " working" : "");
+      $("tape").hidden = !s.tape;
+      if (s.tape) { $("tape").href = s.tape.url; $("tape").textContent = "Download " + s.tape.name; }
+    } catch (err) {}
+    await pause(document.hidden ? 6000 : 2000);
+  }
+})();
+</script>
+</body>
+</html>

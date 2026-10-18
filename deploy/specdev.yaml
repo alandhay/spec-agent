@@ -1,0 +1,367 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  specdev - the ZX Spectrum coding agent. One Linux instance (agent, headless Fuse,
+  users' programs) behind CloudFront, sign-in with Cognito, Claude through Bedrock.
+  The instance stops itself when unused; the page (served from S3) wakes it through a Lambda.
+
+Parameters:
+  InstanceType:
+    Type: String
+    Default: t4g.medium
+  Subnet:
+    Type: AWS::EC2::Subnet::Id
+    Description: A public subnet (the instance is only reachable from CloudFront).
+  Vpc:
+    Type: AWS::EC2::VPC::Id
+  CloudFrontPrefixList:
+    Type: String
+    Description: Id of the managed prefix list com.amazonaws.global.cloudfront.origin-facing.
+  Image:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id
+  Port:
+    Type: Number
+    Default: 8766
+
+Resources:
+  Bucket:                               # the page (site/), code bundles and the copy of users' programs
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+
+  Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: specdev
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                  - bedrock:ListInferenceProfiles
+                  - bedrock:GetInferenceProfile
+                Resource: "*"
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+                Resource: !Sub "${Bucket.Arn}/*"
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt Bucket.Arn
+
+  BucketPolicy:                         # CloudFront may read the page, nothing else
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref Bucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: cloudfront.amazonaws.com }
+            Action: s3:GetObject
+            Resource: !Sub "${Bucket.Arn}/site/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}"
+
+  SiteAccess:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${AWS::StackName}-site"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  WakeAccess:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${AWS::StackName}-wake"
+        OriginAccessControlOriginType: lambda
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  WakeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: wake
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ec2:DescribeInstances
+                Resource: "*"
+              - Effect: Allow
+                Action: ec2:StartInstances
+                Resource: !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/${Instance}"
+
+  Wake:                                 # GET /wake: is the instance up? start it if not (signed-in people only)
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.13
+      Handler: index.handler
+      Timeout: 15
+      MemorySize: 256
+      Role: !GetAtt WakeRole.Arn
+      Environment:
+        Variables:
+          INSTANCE: !Ref Instance
+          POOL: !Ref UserPool
+      Code:
+        ZipFile: |
+          import base64, hashlib, json, os, time, urllib.request
+          import boto3
+
+          INSTANCE, POOL = os.environ["INSTANCE"], os.environ["POOL"]
+          ISSUER = "https://cognito-idp." + POOL.split("_")[0] + ".amazonaws.com/" + POOL
+          SHA256_PREFIX = bytes.fromhex("3031300d060960864801650304020105000420")
+          ec2 = boto3.client("ec2")
+          keys = {}
+
+          def b64(text):
+              return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+          def signed_in(token):
+              # True for an unexpired ID token signed by the user pool (RS256, checked by hand).
+              try:
+                  head, body, signature = token.split(".")
+                  kid = json.loads(b64(head))["kid"]
+                  if kid not in keys:
+                      with urllib.request.urlopen(ISSUER + "/.well-known/jwks.json", timeout=5) as r:
+                          for k in json.load(r)["keys"]:
+                              keys[k["kid"]] = (int.from_bytes(b64(k["n"]), "big"), int.from_bytes(b64(k["e"]), "big"))
+                  n, e = keys[kid]
+                  size = (n.bit_length() + 7) // 8
+                  digest = hashlib.sha256((head + "." + body).encode()).digest()
+                  padding = bytes([0, 1]) + bytes([255]) * (size - len(SHA256_PREFIX) - 35) + bytes([0])
+                  if pow(int.from_bytes(b64(signature), "big"), e, n).to_bytes(size, "big") != padding + SHA256_PREFIX + digest:
+                      return False
+                  claims = json.loads(b64(body))
+                  return claims["iss"] == ISSUER and claims["token_use"] == "id" and claims["exp"] > time.time()
+              except Exception:
+                  return False
+
+          def reply(code, data):
+              return {"statusCode": code, "headers": {"Content-Type": "application/json", "Cache-Control": "no-store"},
+                      "body": json.dumps(data)}
+
+          def handler(event, context):
+              cookies = list(event.get("cookies") or [])
+              cookies += (event.get("headers", {}).get("cookie") or "").split(";")
+              jar = dict(c.strip().split("=", 1) for c in cookies if "=" in c)
+              if not signed_in(jar.get("specdev_token", "")):
+                  return reply(401, {"error": "sign in"})
+              state = ec2.describe_instances(InstanceIds=[INSTANCE])["Reservations"][0]["Instances"][0]["State"]["Name"]
+              if state == "stopped":
+                  ec2.start_instances(InstanceIds=[INSTANCE])
+                  state = "pending"
+              return reply(200, {"state": state})
+
+  WakeUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      TargetFunctionArn: !GetAtt Wake.Arn
+      AuthType: AWS_IAM
+
+  WakeUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref Wake
+      Action: lambda:InvokeFunctionUrl
+      Principal: cloudfront.amazonaws.com
+      FunctionUrlAuthType: AWS_IAM
+      SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}"
+
+  WakeInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref Wake
+      Action: lambda:InvokeFunction
+      Principal: cloudfront.amazonaws.com
+      SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}"
+
+  Profile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref Role]
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: specdev - web port from CloudFront only
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref Port
+          ToPort: !Ref Port
+          SourcePrefixListId: !Ref CloudFrontPrefixList
+
+  Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref Image
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref Profile
+      SubnetId: !Ref Subnet
+      SecurityGroupIds: [!Ref SecurityGroup]
+      MetadataOptions:
+        HttpTokens: required
+        HttpPutResponseHopLimit: 1
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs: { VolumeSize: 20, VolumeType: gp3, Encrypted: true }
+      Tags:
+        - { Key: Name, Value: specdev }
+
+  Address:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref Instance
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: specdev - ZX Spectrum coding agent
+        Enabled: true
+        HttpVersion: http2and3
+        PriceClass: PriceClass_100
+        DefaultRootObject: index.html
+        Origins:
+          - Id: site
+            DomainName: !GetAtt Bucket.RegionalDomainName
+            OriginPath: /site
+            OriginAccessControlId: !Ref SiteAccess
+            S3OriginConfig: {}
+          - Id: wake
+            DomainName: !Select [2, !Split ["/", !GetAtt WakeUrl.FunctionUrl]]
+            OriginAccessControlId: !Ref WakeAccess
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+          - Id: app
+            # The address's public DNS name, which stays the same across stop/start.
+            DomainName: !Sub
+              - "ec2-${Dashed}.compute-1.amazonaws.com"
+              - Dashed: !Join ["-", !Split [".", !GetAtt Address.PublicIp]]
+            CustomOriginConfig:
+              OriginProtocolPolicy: http-only
+              HTTPPort: !Ref Port
+              OriginReadTimeout: 60
+              OriginKeepaliveTimeout: 60
+            ConnectionAttempts: 1       # fail fast when the instance is stopped, so the page can wake it
+            ConnectionTimeout: 3
+        DefaultCacheBehavior:           # the page, which must load even when the instance is stopped
+          TargetOriginId: site
+          ViewerProtocolPolicy: redirect-to-https
+          Compress: true
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad          # CachingDisabled
+        CacheBehaviors:
+          - PathPattern: /api/config    # written to the bucket by deploy.py
+            TargetOriginId: site
+            ViewerProtocolPolicy: redirect-to-https
+            Compress: true
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+          - PathPattern: /wake
+            TargetOriginId: wake
+            ViewerProtocolPolicy: redirect-to-https
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac  # AllViewerExceptHostHeader
+          - PathPattern: /mcp/*         # the MCP server for assistants (specdev/mcp.py)
+            TargetOriginId: app
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            OriginRequestPolicyId: 216adef6-5c7f-47e4-b989-5492eafa07d3  # AllViewer
+          - PathPattern: /api/*
+            TargetOriginId: app
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+            Compress: true
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            OriginRequestPolicyId: 216adef6-5c7f-47e4-b989-5492eafa07d3  # AllViewer
+
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: specdev
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true        # invited people only
+        InviteMessageTemplate:
+          EmailSubject: Your ZX Spectrum workbench sign-in
+          EmailMessage: "You have been invited to the ZX Spectrum workbench. Sign in as {username} with the temporary password {####}"
+      Policies:
+        PasswordPolicy: { MinimumLength: 10, TemporaryPasswordValidityDays: 7 }
+
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      UserPoolId: !Ref UserPool
+      Domain: !Sub "specdev-${AWS::AccountId}"
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientName: page
+      GenerateSecret: false
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows: [code]
+      AllowedOAuthScopes: [openid, email]
+      SupportedIdentityProviders: [COGNITO]
+      # The admin flow needs AWS credentials; it is how deploy/check.sh signs a test person in.
+      ExplicitAuthFlows: [ALLOW_ADMIN_USER_PASSWORD_AUTH, ALLOW_REFRESH_TOKEN_AUTH, ALLOW_USER_SRP_AUTH]
+      CallbackURLs: [!Sub "https://${Distribution.DomainName}/"]
+      LogoutURLs: [!Sub "https://${Distribution.DomainName}/"]
+      IdTokenValidity: 24
+      AccessTokenValidity: 24
+      RefreshTokenValidity: 30
+      TokenValidityUnits: { IdToken: hours, AccessToken: hours, RefreshToken: days }
+      PreventUserExistenceErrors: ENABLED
+
+Outputs:
+  Url:
+    Value: !Sub "https://${Distribution.DomainName}/"
+  InstanceId:
+    Value: !Ref Instance
+  Bucket:
+    Value: !Ref Bucket
+  UserPoolId:
+    Value: !Ref UserPool
+  UserPoolClientId:
+    Value: !Ref UserPoolClient
+  AuthDomain:
+    Value: !Sub "specdev-${AWS::AccountId}.auth.${AWS::Region}.amazoncognito.com"
+  DistributionId:
+    Value: !Ref Distribution

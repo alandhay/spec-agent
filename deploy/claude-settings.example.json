@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(aws cloudformation:*)",
+      "Bash(aws ssm:*)",
+      "Bash(aws s3:*)",
+      "Bash(aws cognito-idp:*)",
+      "Bash(.venv/Scripts/python.exe deploy/deploy.py:*)"
+    ]
+  }
+}

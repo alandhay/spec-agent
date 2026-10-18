@@ -1,0 +1,8 @@
+10 BORDER 7: PAPER 7: INK 0: CLS
+20 PRINT AT 1,5; PAPER 1; INK 6; BRIGHT 1;"  SQUARES OF 1 TO 10  "
+30 PRINT AT 3,9;"Number";TAB 18;"Square"
+40 PRINT AT 4,9;"------";TAB 18;"------"
+50 FOR n=1 TO 10
+60 LET a$=STR$ n: LET b$=STR$ (n*n)
+70 PRINT AT 4+n,15-LEN a$;a$;AT 4+n,24-LEN b$;b$
+80 NEXT n

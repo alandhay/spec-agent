@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SpecArt</title>
+<style>
+  :root {
+    --bg: #101114; --panel: #191b20; --panel-2: #20232a; --line: #2c3038;
+    --text: #e8e9ec; --dim: #9aa0aa; --accent: #ffd400; --good: #3ddc84; --bad: #ff5a52; --work: #4cc9ff;
+    --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, "Segoe UI", sans-serif; }
+  header { padding: 18px 24px 14px; border-bottom: 1px solid var(--line); position: relative; }
+  header::after { content: ""; position: absolute; left: 0; right: 0; bottom: -4px; height: 4px;
+    background: linear-gradient(90deg, #d80000 0 25%, #d8d800 25% 50%, #00d800 50% 75%, #00d8d8 75%); }
+  h1 { margin: 0; font-size: 22px; letter-spacing: .5px; }
+  header p { margin: 4px 0 0; color: var(--dim); max-width: 70ch; }
+  main { padding: 24px; display: grid; gap: 20px; grid-template-columns: minmax(0, 1fr); max-width: 1500px; margin: 0 auto; }
+
+  .controls { display: grid; grid-template-columns: minmax(240px, 1.2fr) minmax(0, 2fr); gap: 16px; }
+  .drop { border: 2px dashed var(--line); border-radius: 10px; padding: 22px 16px; text-align: center; cursor: pointer;
+    background: var(--panel); transition: border-color .15s, background .15s; }
+  .drop.over, .drop:hover { border-color: var(--accent); background: var(--panel-2); }
+  .drop strong { display: block; font-size: 16px; }
+  .drop span { color: var(--dim); font-size: 13px; }
+  .drop .chosen { color: var(--accent); margin-top: 6px; word-break: break-all; }
+  .options { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px;
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px 18px; align-content: start; }
+  label.field { display: grid; gap: 4px; font-size: 13px; color: var(--dim); }
+  select { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 7px 8px; font: inherit; }
+  .buttons { grid-column: 1 / -1; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  button { font: inherit; border-radius: 6px; padding: 8px 16px; cursor: pointer; border: 1px solid var(--line);
+    background: var(--panel-2); color: var(--text); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #111; font-weight: 600; }
+  button:disabled { opacity: .45; cursor: default; }
+  .hint { color: var(--dim); font-size: 13px; }
+
+  .pictures { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+  figure { margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  figcaption { padding: 10px 14px; display: flex; justify-content: space-between; align-items: center; gap: 8px;
+    border-bottom: 1px solid var(--line); font-weight: 600; }
+  figcaption small { font-weight: 400; color: var(--dim); }
+  .screen { aspect-ratio: 4 / 3; background: #000; display: grid; place-items: center; position: relative; }
+  .screen img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .screen img.pixels { image-rendering: pixelated; }
+  .screen .empty { color: #555; font-size: 13px; padding: 0 20px; text-align: center; }
+  .toggle { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .toggle button { border: 0; border-radius: 0; padding: 3px 10px; font-size: 12px; background: transparent; color: var(--dim); }
+  .toggle button.on { background: var(--panel-2); color: var(--text); }
+
+  .lower { display: grid; grid-template-columns: minmax(300px, 1fr) minmax(0, 1.3fr); gap: 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .panel h2 { margin: 0 0 10px; font-size: 14px; text-transform: uppercase; letter-spacing: .8px; color: var(--dim); }
+  ol.stages { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+  ol.stages li { display: grid; grid-template-columns: 22px 1fr auto; gap: 8px; align-items: start; }
+  .dot { width: 14px; height: 14px; border-radius: 50%; margin-top: 4px; border: 2px solid var(--line); }
+  li.working .dot { border-color: var(--work); border-top-color: transparent; animation: spin .8s linear infinite; }
+  li.done .dot { background: var(--good); border-color: var(--good); }
+  li.failed .dot { background: var(--bad); border-color: var(--bad); }
+  li.skipped .dot { background: var(--line); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .stage-label { font-weight: 600; }
+  li.waiting .stage-label { color: var(--dim); font-weight: 400; }
+  .stage-detail { color: var(--dim); font-size: 13px; }
+  .secs { color: var(--dim); font: 12px var(--mono); padding-top: 3px; }
+
+  .verdict { margin-top: 14px; padding: 12px 14px; border-radius: 8px; background: var(--panel-2); display: none; }
+  .verdict.show { display: block; }
+  .verdict .big { font-size: 26px; font-weight: 700; }
+  .verdict .big small { font-size: 13px; font-weight: 400; color: var(--dim); margin-left: 8px; }
+  .verdict.ok { border-left: 4px solid var(--good); }
+  .verdict.warn { border-left: 4px solid var(--bad); }
+  .downloads { margin-top: 8px; display: flex; gap: 12px; flex-wrap: wrap; }
+  a { color: var(--work); }
+
+  svg.chart { width: 100%; height: 150px; display: block; }
+  .chart-note { color: var(--dim); font-size: 12px; margin-top: 4px; }
+  pre.log { margin: 12px 0 0; max-height: 220px; overflow: auto; background: #0b0c0e; border: 1px solid var(--line);
+    border-radius: 8px; padding: 10px 12px; font: 12px/1.5 var(--mono); color: #c9ced6; white-space: pre-wrap; }
+  .error { color: var(--bad); margin-top: 8px; }
+
+  @media (max-width: 1000px) {
+    .controls, .lower { grid-template-columns: 1fr; }
+    .pictures { grid-template-columns: 1fr; }
+    .options { grid-template-columns: 1fr; }
+    main { padding: 16px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>SpecArt</h1>
+  <p>Give it any image. It searches for the ZX Spectrum picture that looks most like it, runs that picture
+     on the emulator, and measures how close the emulator's screen is to your original.</p>
+</header>
+
+<main>
+  <section class="controls">
+    <div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose an image">
+      <strong>Drop an image here, or click to choose</strong>
+      <span>JPEG, PNG, GIF, BMP, TIFF, WebP ... any size or colour depth</span>
+      <div class="chosen" id="chosen"></div>
+      <input type="file" id="file" accept="image/*,.tif,.tiff,.bmp,.webp,.ico,.ppm,.tga" hidden>
+    </div>
+    <div class="options">
+      <label class="field">Screen
+        <select id="mode">
+          <option value="multicolour">Multicolour (128K, 8x2 colour cells)</option>
+          <option value="standard">Standard (any Spectrum, 8x8 cells)</option>
+        </select>
+      </label>
+      <label class="field">Shape
+        <select id="fit">
+          <option value="fit">Show the whole image</option>
+          <option value="fill">Fill the screen (crop edges)</option>
+          <option value="stretch">Stretch to fit</option>
+        </select>
+      </label>
+      <label class="field">Effort
+        <select id="effort">
+          <option value="thorough">Thorough (3 attempts)</option>
+          <option value="quick">Quick (1 attempt)</option>
+        </select>
+      </label>
+      <label class="field">Shadows
+        <select id="tone">
+          <option value="original">As in the image</option>
+          <option value="lift">Lift a little</option>
+          <option value="lift-more">Lift a lot</option>
+        </select>
+      </label>
+      <div class="buttons">
+        <button class="primary" id="go" disabled>Convert</button>
+        <button id="sample">Try the Jupiter photo</button>
+        <span class="hint" id="hint">The emulator window is restarted for each picture.</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="pictures">
+    <figure>
+      <figcaption>Your image <small>fitted to 256x192</small></figcaption>
+      <div class="screen" id="s-target"><div class="empty">Nothing yet</div></div>
+    </figure>
+    <figure>
+      <figcaption>Spectrum picture
+        <span class="toggle" id="view">
+          <button data-view="render" class="on">Pixels</button><button data-view="blended">As the eye sees it</button>
+        </span>
+      </figcaption>
+      <div class="screen" id="s-render"><div class="empty">Appears here while the search runs</div></div>
+    </figure>
+    <figure>
+      <figcaption>On the emulator <small>captured from Fuse</small></figcaption>
+      <div class="screen" id="s-emulator"><div class="empty">Shown once the picture is running on the emulator</div></div>
+    </figure>
+  </section>
+
+  <section class="lower">
+    <div class="panel">
+      <h2>Progress</h2>
+      <ol class="stages" id="stages"></ol>
+      <div class="error" id="error"></div>
+      <div class="verdict" id="verdict">
+        <div class="big" id="match"></div>
+        <div id="verdict-text"></div>
+        <div class="downloads" id="downloads"></div>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Perceived error (lower is closer)</h2>
+      <svg class="chart" id="chart" viewBox="0 0 600 150" preserveAspectRatio="none" aria-label="Error by step"></svg>
+      <div class="chart-note" id="chart-note">Each line is one attempt: the first point is the plain dither, the rest are refinement passes.</div>
+      <pre class="log" id="log" aria-live="polite"></pre>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const COLOURS = ["#ffd400", "#4cc9ff", "#ff7ad9", "#3ddc84"];
+let file = null, jobId = null, timer = null, view = "render", versions = {};
+
+function setFile(f) {
+  file = f;
+  $("chosen").textContent = f ? `${f.name} (${(f.size / 1024).toFixed(0)} KB)` : "";
+  $("go").disabled = !f;
+}
+const drop = $("drop");
+drop.addEventListener("click", () => $("file").click());
+drop.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") $("file").click(); });
+$("file").addEventListener("change", e => setFile(e.target.files[0] || null));
+["dragenter", "dragover"].forEach(n => drop.addEventListener(n, e => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach(n => drop.addEventListener(n, e => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", e => { if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]); });
+
+function options() {
+  return `mode=${$("mode").value}&fit=${$("fit").value}&effort=${$("effort").value}&tone=${$("tone").value}`;
+}
+async function start(url, body) {
+  reset();
+  setBusy(true);
+  try {
+    const res = await fetch(url, { method: "POST", body });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    jobId = data.id;
+    timer = setInterval(poll, 400);
+    poll();
+  } catch (err) {
+    $("error").textContent = "Could not start: " + err.message;
+    setBusy(false);
+  }
+}
+$("go").addEventListener("click", () => file && start(`/api/jobs?name=${encodeURIComponent(file.name)}&${options()}`, file));
+$("sample").addEventListener("click", () => start(`/api/jobs?sample=jupiter&${options()}`, null));
+
+function setBusy(busy) {
+  $("go").disabled = busy || !file;
+  $("sample").disabled = busy;
+  $("hint").textContent = busy ? "Working..." : "The emulator window is restarted for each picture.";
+}
+function reset() {
+  clearInterval(timer);
+  versions = {};
+  for (const key of ["target", "render", "emulator"]) {
+    const box = $("s-" + key);
+    box.querySelector("img")?.remove();
+    box.querySelector(".empty").style.display = "";
+  }
+  $("stages").replaceChildren();
+  $("log").textContent = "";
+  $("error").textContent = "";
+  $("verdict").className = "verdict";
+  $("chart").replaceChildren();
+}
+
+$("view").addEventListener("click", e => {
+  const chosen = e.target.dataset.view;
+  if (!chosen) return;
+  view = chosen;
+  for (const b of $("view").children) b.classList.toggle("on", b.dataset.view === view);
+  versions.shown = null;
+  if (jobId) poll();
+});
+
+function showImage(boxId, name, version, pixels) {
+  const box = $(boxId);
+  let img = box.querySelector("img");
+  if (!img) {
+    img = document.createElement("img");
+    img.alt = "";
+    box.appendChild(img);
+    box.querySelector(".empty").style.display = "none";
+  }
+  img.className = pixels ? "pixels" : "";
+  img.src = `/jobs/${jobId}/${name}.png?v=${version}`;
+}
+
+function drawChart(scores) {
+  const svg = $("chart");
+  svg.replaceChildren();
+  if (!scores.length) return;
+  const values = scores.map(s => s.value);
+  const top = Math.max(...values) * 1.05, bottom = Math.min(...values) * 0.9;
+  const attempts = [...new Set(scores.map(s => s.attempt))];
+  const longest = Math.max(...attempts.map(a => scores.filter(s => s.attempt === a).length));
+  const x = i => 30 + (longest > 1 ? i / (longest - 1) : 0) * 550;
+  const y = v => 10 + (top - v) / (top - bottom || 1) * 125;
+  const ns = "http://www.w3.org/2000/svg";
+  for (const [label, v] of [[top.toFixed(3), top], [bottom.toFixed(3), bottom]]) {
+    const t = document.createElementNS(ns, "text");
+    t.setAttribute("x", 2); t.setAttribute("y", y(v) + 4); t.setAttribute("fill", "#9aa0aa"); t.setAttribute("font-size", "10");
+    t.textContent = label; svg.appendChild(t);
+  }
+  attempts.forEach((a, n) => {
+    const pts = scores.filter(s => s.attempt === a);
+    const line = document.createElementNS(ns, "polyline");
+    line.setAttribute("points", pts.map((s, i) => `${x(i)},${y(s.value)}`).join(" "));
+    line.setAttribute("fill", "none"); line.setAttribute("stroke", COLOURS[n % COLOURS.length]); line.setAttribute("stroke-width", "2");
+    line.setAttribute("vector-effect", "non-scaling-stroke");
+    svg.appendChild(line);
+    pts.forEach((s, i) => {
+      const c = document.createElementNS(ns, "circle");
+      c.setAttribute("cx", x(i)); c.setAttribute("cy", y(s.value)); c.setAttribute("r", 3); c.setAttribute("fill", COLOURS[n % COLOURS.length]);
+      const title = document.createElementNS(ns, "title"); title.textContent = `${s.label}: ${s.value.toFixed(4)}`;
+      c.appendChild(title); svg.appendChild(c);
+    });
+  });
+}
+
+async function poll() {
+  let s;
+  try {
+    s = await (await fetch(`/api/jobs/${jobId}`)).json();
+  } catch { return; }
+
+  const list = $("stages");
+  list.replaceChildren(...s.stages.map(stage => {
+    const li = document.createElement("li");
+    li.className = stage.state;
+    const dot = document.createElement("span"); dot.className = "dot";
+    const body = document.createElement("div");
+    const label = document.createElement("div"); label.className = "stage-label"; label.textContent = stage.label;
+    const detail = document.createElement("div"); detail.className = "stage-detail"; detail.textContent = stage.detail;
+    body.append(label, detail);
+    const secs = document.createElement("span"); secs.className = "secs";
+    secs.textContent = stage.seconds != null ? stage.seconds.toFixed(1) + " s" : "";
+    li.append(dot, body, secs);
+    return li;
+  }));
+
+  const log = $("log");
+  const text = s.log.join("\n");
+  if (log.textContent !== text) { log.textContent = text; log.scrollTop = log.scrollHeight; }
+
+  if (s.images.target && versions.target !== s.images.target) {
+    versions.target = s.images.target; showImage("s-target", "target", s.images.target, false);
+  }
+  const v = s.images[view];
+  if (v && versions.shown !== view + v) {
+    versions.shown = view + v; showImage("s-render", view, v, view === "render");
+  }
+  if (s.images.emulator && versions.emulator !== s.images.emulator) {
+    versions.emulator = s.images.emulator; showImage("s-emulator", "emulator", s.images.emulator, true);
+  }
+  drawChart(s.scores);
+
+  if (s.state !== "running") {
+    clearInterval(timer);
+    setBusy(false);
+    if (s.state === "error") { $("error").textContent = "Failed: " + s.error; return; }
+    const r = s.result, err = r.emulator_error ?? r.perceived_error;
+    const verdict = $("verdict");
+    verdict.className = "verdict show " + (r.exact === false ? "warn" : "ok");
+    $("match").textContent = (100 * (1 - err)).toFixed(1) + "% match";
+    const small = document.createElement("small"); small.textContent = `perceived error ${err.toFixed(4)}`;
+    $("match").appendChild(small);
+    $("verdict-text").textContent = r.emulator_error == null
+      ? "Measured on the converter's own picture (emulator not used)."
+      : r.exact ? "Measured on the emulator's screen, which shows exactly the picture the converter intended."
+                : `Measured on the emulator's screen. ${r.pixels_wrong} pixels differ from the intended picture.`;
+    $("downloads").replaceChildren(...r.files.map(f => {
+      const a = document.createElement("a"); a.href = `/jobs/${jobId}/${f}`; a.textContent = "Download " + f; return a;
+    }));
+  }
+}
+</script>
+</body>
+</html>

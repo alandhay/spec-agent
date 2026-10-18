@@ -1,0 +1,851 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SpecDev</title>
+<style>
+  :root {
+    --bg: #101114; --panel: #191b20; --panel-2: #20232a; --line: #2c3038;
+    --text: #e8e9ec; --dim: #9aa0aa; --accent: #ffd400; --good: #3ddc84; --bad: #ff5a52; --work: #4cc9ff;
+    --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, "Segoe UI", sans-serif;
+    display: grid; grid-template-rows: auto minmax(0, 1fr); }
+  header { padding: 12px 20px 10px; border-bottom: 1px solid var(--line); position: relative;
+    display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+  header::after { content: ""; position: absolute; left: 0; right: 0; bottom: -4px; height: 4px;
+    background: linear-gradient(90deg, #d80000 0 25%, #d8d800 25% 50%, #00d800 50% 75%, #00d8d8 75%); }
+  h1 { margin: 0; font-size: 20px; letter-spacing: .5px; }
+  header p { margin: 0; color: var(--dim); font-size: 13px; flex: 1; min-width: 200px; }
+  .status { font-size: 13px; color: var(--dim); display: flex; align-items: center; gap: 8px; }
+  .status .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--line); }
+  .status.working .dot { background: var(--work); animation: pulse 1s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .3; } }
+  .budget { font-size: 13px; color: var(--dim); display: flex; align-items: center; gap: 8px; position: relative; }
+  .budget b { color: var(--text); font-variant-numeric: tabular-nums; }
+  .budget.low b { color: var(--accent); }
+  .budget.out b { color: var(--bad); }
+  .budget .meter { width: 70px; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+  .budget .meter i { display: block; height: 100%; background: var(--good); transition: width .4s; }
+  .budget.low .meter i { background: var(--accent); }
+  .budget.out .meter i { background: var(--bad); }
+  .budget .amounts { position: absolute; top: calc(100% + 8px); right: 0; z-index: 5; background: var(--panel-2);
+    border: 1px solid var(--line); border-radius: 8px; padding: 8px; display: flex; gap: 6px; white-space: nowrap;
+    box-shadow: 0 6px 20px #0008; }
+  .budget .amounts[hidden] { display: none; }
+
+  /* Three panes with two draggable dividers: chat | (Spectrum over Program). */
+  main { padding: 16px; display: grid; min-height: 0;
+    grid-template-columns: minmax(260px, var(--chat, 50%)) 16px minmax(260px, 1fr); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; min-height: 0;
+    display: flex; flex-direction: column; overflow: hidden; }
+  .panel > h2 { margin: 0; padding: 9px 14px; font-size: 12px; text-transform: uppercase; letter-spacing: .8px;
+    color: var(--dim); border-bottom: 1px solid var(--line); display: flex; justify-content: space-between;
+    align-items: center; gap: 10px; }
+  .right { display: grid; min-height: 0; grid-template-rows: minmax(120px, var(--tv, 55%)) 16px minmax(90px, 1fr); }
+  .split { position: relative; touch-action: none; }
+  .split.x { cursor: col-resize; }
+  .split.y { cursor: row-resize; }
+  .split::after { content: ""; position: absolute; border-radius: 2px; background: var(--line); transition: background .15s; }
+  .split.x::after { top: calc(50% - 22px); height: 44px; left: 6px; width: 4px; }
+  .split.y::after { left: calc(50% - 22px); width: 44px; top: 6px; height: 4px; }
+  .split:hover::after, .split.dragging::after { background: var(--accent); }
+  body.resizing { user-select: none; }
+
+  button { font: inherit; border-radius: 6px; padding: 7px 14px; cursor: pointer; border: 1px solid var(--line);
+    background: var(--panel-2); color: var(--text); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #111; font-weight: 600; }
+  button.small { padding: 2px 9px; font-size: 12px; text-transform: none; letter-spacing: 0; }
+  button:disabled { opacity: .45; cursor: default; }
+
+  /* conversation */
+  #log { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+  .empty { color: var(--dim); margin: auto; text-align: center; max-width: 46ch; }
+  .empty .ideas { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 14px; }
+  .msg { max-width: 100%; overflow-wrap: anywhere; }
+  .msg.user { align-self: flex-end; background: #2a2f3a; border-radius: 10px 10px 2px 10px; padding: 8px 12px;
+    max-width: 85%; white-space: pre-wrap; }
+  .msg.text { white-space: pre-wrap; }
+  .msg.text code { font-family: var(--mono); font-size: 13px; background: var(--panel-2); padding: 1px 4px; border-radius: 4px; }
+  .msg.thinking { color: var(--dim); font-size: 13px; font-style: italic; white-space: pre-wrap;
+    border-left: 2px solid var(--line); padding-left: 10px; }
+  .msg.error { color: var(--bad); white-space: pre-wrap; }
+  .live { display: flex; flex-direction: column; gap: 10px; }
+  .live .msg:last-child::after { content: "\25AE"; color: var(--work); margin-left: 2px; animation: pulse 1s ease-in-out infinite; }
+  .msg.writing { border: 1px dashed var(--line); border-radius: 8px; padding: 6px 10px; font-size: 13px; }
+  .msg.writing .label { color: var(--work); font-size: 11px; text-transform: uppercase; letter-spacing: .6px; }
+  .msg.writing pre { margin: 4px 0 0; font: 12px/1.35 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--dim); }
+  .msg.done { color: var(--dim); font-size: 12px; border-top: 1px solid var(--line); padding-top: 6px; }
+  details.tool { border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); font-size: 13px; }
+  details.tool summary { padding: 6px 10px; cursor: pointer; display: flex; gap: 8px; align-items: center; list-style: none; }
+  details.tool summary::-webkit-details-marker { display: none; }
+  .tool .mark { width: 10px; height: 10px; border-radius: 50%; flex: none; border: 2px solid var(--work);
+    border-top-color: transparent; animation: spin .8s linear infinite; }
+  .tool.ok .mark { background: var(--good); border-color: var(--good); animation: none; }
+  .tool.failed .mark { background: var(--bad); border-color: var(--bad); animation: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .tool .name { font-weight: 600; }
+  .tool .brief { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+  .tool .outcome { font-family: var(--mono); font-size: 12px; color: var(--accent); white-space: nowrap; }
+  .tool.failed .outcome { color: var(--bad); }
+  .tool .body { border-top: 1px solid var(--line); padding: 8px 10px; display: grid; gap: 8px; }
+  .tool pre { margin: 0; font: 12px/1.35 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 340px; overflow: auto; }
+  .tool pre.screen { background: #000; color: #d8d8d8; padding: 8px; border-radius: 4px; white-space: pre; }
+  .tool img { max-width: 100%; image-rendering: pixelated; border-radius: 4px; display: block; }
+  .tool .label { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .6px; }
+
+  form { border-top: 1px solid var(--line); padding: 10px; display: flex; gap: 8px; align-items: flex-end; }
+  textarea { flex: 1; resize: none; background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: 9px 11px; font: inherit; min-height: 42px; max-height: 160px; }
+  textarea:focus { outline: 1px solid var(--accent); }
+
+  /* emulator */
+  /* The picture fills whatever room its pane has and keeps the Spectrum's 4:3 shape. */
+  .tv { background: #000; position: relative; flex: 1; min-height: 0; }
+  .tv img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }
+  .tv .off { color: #555; font-size: 13px; padding: 0 20px; text-align: center; position: absolute; inset: 0;
+    display: grid; place-items: center; }
+  .tv .off[hidden] { display: none; }
+  .busy { color: var(--work); text-transform: none; letter-spacing: 0; }
+
+  /* source */
+  .tabs { display: flex; gap: 4px; overflow-x: auto; padding: 6px 8px; border-bottom: 1px solid var(--line); flex: none; }
+  .tabs button { padding: 3px 10px; font-size: 13px; font-family: var(--mono); white-space: nowrap; background: transparent; }
+  .tabs button.on { background: var(--panel-2); border-color: var(--accent); }
+  .tabs a { padding: 3px 8px; font: 12px var(--mono); color: var(--dim); white-space: nowrap; align-self: center; }
+  #source { flex: 1; overflow: auto; margin: 0; padding: 10px 14px; font: 13px/1.5 var(--mono); white-space: pre; tab-size: 8; }
+  #source .num { color: var(--accent); }
+  #source .rem { color: var(--dim); }
+  #source .str { color: #8fd694; }
+
+  /* projects, attachments, the editor, the stats read-out */
+  .panel > h2 > span { display: flex; align-items: center; gap: 6px; }
+  #projectName { color: var(--text); text-transform: none; letter-spacing: 0; font-size: 13px; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; max-width: 40ch; }
+  .overlay { position: fixed; inset: 0; background: #000a; z-index: 20; display: grid; place-items: center; padding: 20px; }
+  .overlay[hidden] { display: none; }
+  .sheet { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; width: min(1000px, 100%);
+    max-height: 100%; display: flex; flex-direction: column; overflow: hidden; }
+  .sheet > h2 { margin: 0; padding: 12px 16px; font-size: 15px; display: flex; justify-content: space-between;
+    align-items: center; border-bottom: 1px solid var(--line); }
+  .cards { padding: 16px; overflow-y: auto; display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+  .card { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 0; text-align: left;
+    overflow: hidden; display: flex; flex-direction: column; }
+  .card:hover, .card.current { border-color: var(--accent); }
+  .card .shot { aspect-ratio: 4 / 3; background: #000; display: grid; place-items: center; color: #555; font-size: 12px; }
+  .card .shot img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; display: block; }
+  .card .what { padding: 8px 10px; display: grid; gap: 2px; }
+  .card .what b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card .what span { color: var(--dim); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .attached { border-top: 1px solid var(--line); padding: 8px 10px; display: flex; gap: 10px; align-items: center; font-size: 13px; }
+  .attached[hidden] { display: none; }
+  .attached img { height: 44px; border-radius: 4px; }
+  select { font: inherit; background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
+  .msg.user img { display: block; max-width: 220px; max-height: 160px; border-radius: 6px; margin-bottom: 6px; }
+  #editor { flex: 1; resize: none; border: 0; border-radius: 0; margin: 0; padding: 10px 14px; font: 13px/1.5 var(--mono);
+    white-space: pre; tab-size: 8; max-height: none; background: #14161a; }
+  #editor[hidden], #newName[hidden] { display: none; }
+  #newName { font: 13px var(--mono); background: var(--panel-2); color: var(--text); border: 1px solid var(--accent);
+    border-radius: 6px; padding: 3px 8px; width: 16ch; }
+  .tv:focus { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .tv .hint { position: absolute; left: 8px; bottom: 6px; font-size: 11px; color: #fff9; background: #0008; padding: 2px 6px;
+    border-radius: 4px; pointer-events: none; }
+  .tv .stats { position: absolute; top: 8px; right: 8px; background: #000c; color: #9f9; font: 11px/1.5 var(--mono);
+    padding: 6px 9px; border-radius: 6px; white-space: pre; pointer-events: none; }
+  .tv .stats[hidden], .tv .hint[hidden] { display: none; }
+  button.on { border-color: var(--accent); color: var(--accent); }
+  .notice { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 30; max-width: min(640px, 90vw);
+    background: #3a1d1b; border: 1px solid var(--bad); color: var(--text); padding: 9px 16px; border-radius: 8px;
+    font-size: 14px; cursor: pointer; box-shadow: 0 6px 20px #0008; }
+
+  @media (max-width: 900px) {
+    body { height: auto; display: block; }
+    main { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+    .right { grid-template-rows: auto auto; gap: 16px; }
+    .split { display: none; }
+    .tv { flex: none; aspect-ratio: 4 / 3; }
+    .panel.chat { height: 75vh; }
+    #source { max-height: 60vh; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>SpecDev</h1>
+  <p>Describe a ZX Spectrum program. The agent writes it, runs it on the emulator, and fixes it until it works.</p>
+  <div class="budget" id="budget" hidden>
+    <span>Budget <b id="budgetLeft"></b> left</span>
+    <span class="meter" title="How much of your budget is left"><i id="budgetBar"></i></span>
+    <button class="small" id="topup" title="Add to your budget">Top up</button>
+    <div class="amounts" id="amounts" hidden></div>
+  </div>
+  <div class="status" id="status"><span class="dot"></span><span id="statusText">Idle</span></div>
+</header>
+<main>
+  <section class="panel chat">
+    <h2><span>Agent <span id="projectName"></span></span>
+      <span><button class="small" id="projects" title="Open one of your earlier projects">Projects</button>
+      <button class="small" id="reset" title="Start a new project with an empty chat">New project</button></span></h2>
+    <div id="log"></div>
+    <div class="attached" id="attached" hidden>
+      <img id="attachedImg" alt="The picture you are sending">
+      <select id="kind" title="What the picture is">
+        <option value="picture">Draw this as Spectrum line art</option>
+        <option value="listing">It is a program listing: type it in and run it</option>
+      </select>
+      <button type="button" class="small" id="unattach">Remove</button>
+    </div>
+    <form id="form">
+      <input type="file" id="pick" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
+      <button type="button" id="attach" title="Send a picture: a program listing to type in, or an image to draw">Image</button>
+      <textarea id="input" rows="1" placeholder="What should it build?  e.g. a bouncing ball that leaves a rainbow trail"></textarea>
+      <button type="button" id="stop" hidden>Stop</button>
+      <button class="primary" id="send">Send</button>
+    </form>
+  </section>
+  <div class="split x" id="splitChat" title="Drag to resize; double-click to reset"></div>
+  <div class="right">
+    <section class="panel">
+      <h2>Spectrum <span><span class="busy" id="busy"></span>
+        <button class="small" id="soundBtn" title="Hear the Spectrum">Sound off</button>
+        <button class="small" id="resetBtn" title="Reset the Spectrum: a clean machine with nothing loaded">Reset</button>
+        <button class="small" id="statsBtn" title="Frame rate, latency, memory and processor use">Stats</button></span></h2>
+      <div class="tv" id="tvBox" tabindex="0" title="Click, then type: your keys go to the Spectrum">
+        <img id="tv" alt="The emulator screen" hidden>
+        <div class="off" id="tvOff">The emulator is not running yet. It starts when the agent first runs a program.</div>
+        <div class="hint" id="keyHint" hidden>Typing goes to the Spectrum  ·  Shift = CAPS SHIFT, Ctrl = SYMBOL SHIFT, Esc = BREAK  ·  click elsewhere to stop</div>
+        <div class="stats" id="stats" hidden></div>
+      </div>
+    </section>
+    <div class="split y" id="splitTv" title="Drag to resize; double-click to reset"></div>
+    <section class="panel">
+      <h2>Program <span><span id="fileNote"></span>
+        <input id="newName" placeholder="name.bas" hidden>
+        <button class="small" id="newFile" title="Write a new program yourself">New</button>
+        <button class="small" id="editFile" title="Change this program yourself">Edit</button>
+        <button class="small" id="saveFile" hidden>Save &amp; run</button>
+        <button class="small" id="runFile" title="Run this program on the emulator">Run</button></span></h2>
+      <div class="tabs" id="tabs"></div>
+      <pre id="source"></pre>
+      <textarea id="editor" spellcheck="false" hidden></textarea>
+    </section>
+  </div>
+</main>
+<div class="overlay" id="library" hidden>
+  <div class="sheet">
+    <h2>Your projects <button class="small" id="closeLibrary">Close</button></h2>
+    <div class="cards" id="cards"></div>
+  </div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const log = $("log"), input = $("input");
+const IDEAS = [
+  "Print the times tables from 1 to 9 in a neat coloured grid",
+  "A bouncing ball that leaves a rainbow trail",
+  "A number guessing game with sound effects",
+  "Draw a spirograph pattern in several colours",
+  "A starfield that scrolls sideways",
+  "Draw the Mandelbrot set, slowly, in eight colours",
+  "A digital clock with big block digits",
+  "Play a short tune with BEEP and show the notes as it goes",
+  "A maze generator that draws a new maze each run",
+  "Conway's Game of Life on a small grid",
+  "A sunset over the sea with a striped sun",
+  "Snake, steered with Q A O P",
+  "A bar chart of the first ten Fibonacci numbers",
+  "Hangman with a small built-in word list",
+  "A kaleidoscope of random symmetric lines",
+  "A lunar lander game with fuel and gravity",
+  "Print a calendar for any month and year I type in",
+  "Draw a Union Jack that fills the screen",
+  "A reaction-time tester that scores me in milliseconds",
+  "A sine wave scroller with a message riding on it",
+  "Noughts and crosses against the computer",
+  "A fireworks display with sound",
+  "Draw a 3D wireframe cube and rotate it",
+  "A Morse code trainer that beeps what I type",
+  "A simple paint program: move a cursor and draw",
+  "The Sierpinski triangle, drawn with the chaos game",
+  "A fruit machine with three spinning reels",
+  "A typing tutor that times how fast I type a sentence",
+  "Draw a spider's web with DRAW and CIRCLE",
+  "A countdown and rocket launch animation",
+];
+let generation = 0, after = 0, running = false, tools = {}, started = null;
+let currentFile = null, pinned = false, fileStamp = {};
+
+function el(tag, cls, text) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+async function post(path, body) {
+  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || r.statusText);
+  return data;
+}
+// Problems are shown in a strip at the top of the page, which goes away by itself or when clicked.
+function notice(text) {
+  const strip = el("div", "notice", text);
+  strip.onclick = () => strip.remove();
+  document.body.append(strip);
+  setTimeout(() => strip.remove(), 8000);
+}
+const tell = err => notice(err.message);
+
+function showEmpty() {
+  const box = el("div", "empty");
+  box.append(el("div", "", "Nothing yet. Say what you want, or try one of these:"));
+  const ideas = el("div", "ideas");
+  // Four of them, different every time.
+  for (const idea of [...IDEAS].sort(() => Math.random() - 0.5).slice(0, 4)) {
+    const b = el("button", "small", idea);
+    b.onclick = () => { input.value = idea; send(); };
+    ideas.append(b);
+  }
+  box.append(ideas);
+  log.replaceChildren(box);
+}
+
+function brief(name, inp) {
+  if (inp.file) return inp.file + (inp.code && inp.code.length ? "  + " + inp.code.join(", ") : "");
+  if (inp.file_path) return inp.file_path.split(/[\\/]/).pop();
+  if (inp.keys) return inp.keys.join(" ");
+  if (inp.text !== undefined) return JSON.stringify(inp.text);
+  if (inp.pattern) return inp.pattern;
+  if (inp.wait_seconds) return "wait up to " + inp.wait_seconds + " s";
+  return "";
+}
+
+function fileOf(name, inp) {
+  const path = inp.file_path || inp.file;
+  if (!path || !["Write", "Edit", "run_program", "assemble"].includes(name)) return null;
+  const base = path.split(/[\\/]/).pop();
+  return /\.(bas|asm|inc)$/i.test(base) ? base : null;
+}
+
+function addEvent(e) {
+  if (log.querySelector(".empty")) log.replaceChildren();
+  if (e.kind === "user") {
+    const box = el("div", "msg user");
+    if (e.image) { const img = el("img"); img.src = "/api/file?name=" + encodeURIComponent(e.image); box.append(img); }
+    box.append(e.text || "");
+    log.append(box);
+  }
+  else if (e.kind === "text") log.append(el("div", "msg text", e.text));
+  else if (e.kind === "thinking") log.append(el("div", "msg thinking", e.text));
+  else if (e.kind === "error") log.append(el("div", "msg error", e.text));
+  else if (e.kind === "done") {
+    const cost = e.cost ? "  ·  $" + e.cost.toFixed(2) : "";
+    log.append(el("div", "msg done" + (e.error ? " error" : ""),
+      (e.error ? "Stopped: " + (e.text || "the agent ended with an error") : "Finished") + "  ·  " + e.seconds + " s  ·  " + e.turns + " steps" + cost));
+  } else if (e.kind === "tool") {
+    const d = el("details", "tool");
+    const s = el("summary");
+    s.append(el("span", "mark"), el("span", "name", e.name), el("span", "brief", brief(e.name, e.input)), el("span", "outcome"));
+    const body = el("div", "body");
+    const shown = Object.assign({}, e.input);
+    for (const key of ["content", "new_string", "old_string"]) if (shown[key]) shown[key] = shown[key].length + " characters";
+    body.append(el("div", "label", "Asked"), el("pre", "", JSON.stringify(shown, null, 1)));
+    if (e.input.content) body.append(el("pre", "", e.input.content));
+    d.append(s, body);
+    log.append(d);
+    tools[e.id] = d;
+    const file = fileOf(e.name, e.input);
+    if (file && !pinned) { currentFile = file; fileStamp = {}; }
+  } else if (e.kind === "result") {
+    const d = tools[e.id];
+    if (!d) return;
+    d.classList.add(e.error ? "failed" : "ok");
+    const body = d.querySelector(".body");
+    body.append(el("div", "label", e.error ? "Problem" : "Result"));
+    const report = /^report: (.*)$/m.exec(e.text || "");
+    if (e.text) body.append(el("pre", report ? "screen" : "", e.text));
+    for (const src of e.images || []) { const img = el("img"); img.src = src; body.append(img); d.open = true; }
+    const outcome = d.querySelector(".outcome");
+    if (e.error) { outcome.textContent = (e.text || "failed").split("\n")[0].slice(0, 60); d.open = true; }
+    else if (report) outcome.textContent = report[1].startsWith("(") ? "no report" : report[1];
+  }
+}
+
+// What the agent is part-way through: its thinking and reply as they are written, and the
+// file or tool call it is composing. Redrawn on every poll and replaced by the finished item.
+const liveBox = el("div", "live");
+function showLive(blocks) {
+  liveBox.replaceChildren();
+  for (const b of blocks) {
+    if (b.kind === "tool") {
+      const box = el("div", "msg writing");
+      box.append(el("div", "label", (b.name || "tool") + "  ·  writing"));
+      // The arguments arrive as unfinished JSON; show the file text inside it as text.
+      const m = /"(?:content|new_string)"\s*:\s*"/.exec(b.text);
+      const body = (m ? b.text.slice(m.index + m[0].length) : b.text)
+        .replace(/\\n/g, "\n").replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+      if (body.trim()) box.append(el("pre", "", body.split("\n").slice(-14).join("\n")));
+      liveBox.append(box);
+    } else if (b.text.trim()) {
+      liveBox.append(el("div", "msg " + b.kind, b.text));
+    } else if (b.kind === "thinking") {
+      liveBox.append(el("div", "msg thinking", "Thinking"));  // the model does not always share the words
+    }
+  }
+  if (liveBox.childElementCount) log.append(liveBox); else liveBox.remove();
+}
+
+async function poll() {
+  try {
+    const r = await fetch(`/api/events?generation=${generation}&after=${after}`);
+    asleep = auth !== null && r.status >= 500;  // hosted, the machine stops itself when unused
+    const data = await r.json();
+    if (data.generation !== generation) {  // another project (or the first load): start the page again
+      generation = data.generation; after = 0; tools = {};
+      currentFile = null; pinned = false; fileStamp = {}; edit(false);
+      $("tv").hidden = true; $("tvOff").hidden = false;
+      showEmpty();
+    }
+    $("projectName").textContent = data.project ? "·  " + data.project.name : "";
+    const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+    for (const e of data.events) { addEvent(e); after = e.n + 1; }
+    showLive(data.live || []);
+    if ((data.events.length || (data.live || []).length) && atBottom) log.scrollTop = log.scrollHeight;
+    running = data.running; started = data.started;
+    $("status").className = "status" + (running ? " working" : "");
+    $("statusText").textContent = running ? "Working  ·  " + Math.round(Date.now() / 1000 - started) + " s" : "Idle";
+    $("stop").hidden = !running;
+    $("send").textContent = running ? "Queue" : "Send";
+    $("busy").textContent = data.busy || "";
+    showBudget(data.budget);
+  } catch (err) {
+    $("status").className = "status";
+    $("statusText").textContent = asleep ? "Asleep. It starts again when you send a message." : "Server not reachable";
+  }
+  setTimeout(poll, running ? 250 : 1200);
+}
+
+// Hosted, each person has a budget that requests are paid from; it is brought up to date as each one finishes.
+function showBudget(budget) {
+  $("budget").hidden = !budget;
+  if (!budget) return;
+  const left = Math.max(0, budget.remaining);
+  $("budgetLeft").textContent = "$" + left.toFixed(2);
+  $("budgetBar").style.width = Math.min(100, 100 * left / Math.max(budget.granted, 0.01)) + "%";
+  $("budget").className = "budget" + (left <= 0 ? " out" : left < 1 ? " low" : "");
+  const amounts = $("amounts");
+  if (!amounts.childElementCount) {
+    for (const amount of budget.top_ups) {
+      const b = el("button", "small", "+ $" + amount);
+      b.onclick = async () => {
+        amounts.hidden = true;
+        try {
+          const r = await fetch("/api/topup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ amount }) });
+          const data = await r.json();
+          if (!r.ok) throw new Error(data.error || r.statusText);
+          showBudget(data.budget);
+        } catch (err) { notice(err.message); }
+      };
+      amounts.append(b);
+    }
+  }
+}
+$("topup").onclick = ev => { ev.stopPropagation(); $("amounts").hidden = !$("amounts").hidden; };
+document.addEventListener("click", () => { $("amounts").hidden = true; });
+
+// A picture to send with the request. It is shrunk here first: the agent needs no more than
+// about 1500 pixels a side, and a phone photo is several times that.
+let attachment = null;
+$("attach").onclick = () => $("pick").click();
+$("pick").onchange = async () => {
+  const file = $("pick").files[0];
+  $("pick").value = "";
+  if (!file) return;
+  try {
+    const picture = await createImageBitmap(file);
+    const scale = Math.min(1, 1568 / Math.max(picture.width, picture.height));
+    const canvas = el("canvas");
+    canvas.width = Math.round(picture.width * scale); canvas.height = Math.round(picture.height * scale);
+    const pen = canvas.getContext("2d");
+    pen.fillStyle = "#fff"; pen.fillRect(0, 0, canvas.width, canvas.height);
+    pen.drawImage(picture, 0, 0, canvas.width, canvas.height);
+    const url = canvas.toDataURL("image/jpeg", 0.88);
+    attachment = { type: "image/jpeg", data: url.slice(url.indexOf(",") + 1) };
+    $("attachedImg").src = url; $("attached").hidden = false;
+    input.placeholder = "Anything to add about the picture? (optional)";
+  } catch (err) { notice("That file could not be read as a picture."); }
+};
+function unattach() {
+  attachment = null; $("attached").hidden = true;
+  input.placeholder = "What should it build?  e.g. a bouncing ball that leaves a rainbow trail";
+}
+$("unattach").onclick = unattach;
+
+async function send() {
+  const text = input.value.trim();
+  if (!text && !attachment) return;
+  const body = attachment ? { text, image: attachment, kind: $("kind").value } : { text };
+  input.value = ""; input.style.height = "";
+  try { if (asleep) await awake(); await post("/api/message", body); running = true; unattach(); }
+  catch (err) { input.value = text; notice(err.message); }
+}
+
+// Projects: each has its own chat, programs and place in the library.
+$("reset").onclick = () => post("/api/project/new").catch(tell);
+$("closeLibrary").onclick = () => { $("library").hidden = true; };
+$("library").onclick = ev => { if (ev.target === $("library")) $("library").hidden = true; };
+$("projects").onclick = async () => {
+  try {
+    const data = await (await fetch("/api/projects")).json();
+    const cards = $("cards");
+    cards.replaceChildren();
+    for (const project of data.projects) {
+      const card = el("button", "card" + (project.id === data.current ? " current" : ""));
+      const shot = el("div", "shot", project.thumb ? undefined : "no picture yet");
+      if (project.thumb) { const img = el("img"); img.src = "/api/thumb?id=" + project.id + "&t=" + project.updated; shot.append(img); }
+      const what = el("div", "what");
+      what.append(el("b", "", project.name),
+        el("span", "", new Date(project.updated * 1000).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })
+          + (project.cost ? "  ·  $" + project.cost.toFixed(2) : "")),
+        el("span", "", project.files.length ? project.files.join(", ") : "no programs yet"));
+      card.append(shot, what);
+      card.onclick = () => post("/api/project/open", { id: project.id }).then(() => { $("library").hidden = true; }, tell);
+      cards.append(card);
+    }
+    $("library").hidden = false;
+  } catch (err) { tell(err); }
+};
+
+$("form").onsubmit = ev => { ev.preventDefault(); send(); };
+input.onkeydown = ev => { if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); send(); } };
+input.oninput = () => { input.style.height = ""; input.style.height = Math.min(input.scrollHeight + 2, 160) + "px"; };
+$("stop").onclick = () => post("/api/stop").catch(tell);
+
+// The emulator's screen and sound each arrive as one long response made of frames: a 4-byte
+// length, then that many bytes (an empty frame now and then shows the connection is alive).
+// Reads frames until the response ends or wanted() says stop.
+async function readFrames(url, onFrame, wanted) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error("no stream");
+  const reader = r.body.getReader();
+  let held = new Uint8Array(0);
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return;
+    const joined = new Uint8Array(held.length + value.length);
+    joined.set(held); joined.set(value, held.length); held = joined;
+    while (held.length >= 4) {
+      const size = new DataView(held.buffer, held.byteOffset).getUint32(0);
+      if (held.length < 4 + size) break;
+      if (size) onFrame(held.slice(4, 4 + size));
+      held = held.slice(4 + size);
+    }
+    if (!wanted()) { reader.cancel(); return; }
+  }
+}
+const pause = ms => new Promise(done => setTimeout(done, ms));
+
+const seen = { frames: 0, bytes: 0 };   // for the stats read-out
+function showFrame(png) {
+  const tv = $("tv"), old = tv.src;
+  tv.src = URL.createObjectURL(new Blob([png], { type: "image/png" }));
+  tv.hidden = false; $("tvOff").hidden = true;
+  seen.frames += 1; seen.bytes += png.length;
+  if (old) setTimeout(() => URL.revokeObjectURL(old), 1000);
+}
+
+async function screen() {
+  for (;;) {
+    try {
+      if (!document.hidden && !asleep) await readFrames("/api/screen.stream", showFrame, () => !document.hidden);
+    } catch (err) { /* server gone; poll() says so */ }
+    await pause(1500);
+  }
+}
+
+// Sound: the first frame says what the samples are, the rest are the samples; silence is not sent.
+// Each piece is queued to play straight after the one before, a little behind real time.
+let sound = null;
+$("soundBtn").onclick = async () => {
+  if (sound) { sound.close(); sound = null; $("soundBtn").textContent = "Sound off"; $("soundBtn").className = "small"; return; }
+  const audio = sound = new AudioContext();
+  $("soundBtn").textContent = "Sound on"; $("soundBtn").className = "small on";
+  while (sound === audio) {
+    let format = null, due = 0;
+    try {
+      await readFrames("/api/sound.stream", frame => {
+        if (!format) { format = JSON.parse(new TextDecoder().decode(frame)); return; }
+        const samples = new Int16Array(frame.buffer, frame.byteOffset, frame.length >> 1);
+        const count = samples.length / format.channels;
+        const piece = audio.createBuffer(format.channels, count, format.rate);
+        for (let c = 0; c < format.channels; c++) {
+          const out = piece.getChannelData(c);
+          for (let i = 0; i < count; i++) out[i] = samples[i * format.channels + c] / 32768;
+        }
+        const source = audio.createBufferSource();
+        source.buffer = piece; source.connect(audio.destination);
+        const now = audio.currentTime;
+        if (due < now + 0.03 || due > now + 0.6) due = now + 0.12;   // starting, or drifted: settle again
+        source.start(due); due += piece.duration;
+        seen.bytes += frame.length;
+      }, () => sound === audio && !document.hidden);
+    } catch (err) { /* try again */ }
+    await pause(1000);
+  }
+};
+
+$("resetBtn").onclick = () => post("/api/reset").catch(tell);
+
+// Typing on the Spectrum: click its screen, then keys go to the emulator until you click away.
+const KEYS = { " ": ["SPACE"], Enter: ["ENTER"], Shift: ["CAPS_SHIFT"], Control: ["SYMBOL_SHIFT"], Escape: ["CAPS_SHIFT", "SPACE"],
+  Backspace: ["CAPS_SHIFT", "0"], ArrowLeft: ["CAPS_SHIFT", "5"], ArrowDown: ["CAPS_SHIFT", "6"], ArrowUp: ["CAPS_SHIFT", "7"],
+  ArrowRight: ["CAPS_SHIFT", "8"] };
+const held = new Map();
+let keyLine = Promise.resolve();        // one at a time, so a key never comes up before it went down
+function sendKeys(keys, down) {
+  keyLine = keyLine.then(() => post("/api/keys", { keys, down })).catch(() => {});
+}
+$("tvBox").onkeydown = ev => {
+  if (ev.altKey || ev.metaKey) return;
+  const keys = KEYS[ev.key] || (/^[a-z0-9]$/i.test(ev.key) ? [ev.key.toUpperCase()] : null);
+  if (!keys) return;
+  ev.preventDefault();
+  if (held.has(ev.code)) return;        // the keyboard's own repeat
+  held.set(ev.code, keys); sendKeys(keys, true);
+};
+$("tvBox").onkeyup = ev => {
+  const keys = held.get(ev.code);
+  if (keys) { held.delete(ev.code); sendKeys(keys, false); ev.preventDefault(); }
+};
+$("tvBox").onfocus = () => { $("keyHint").hidden = false; };
+$("tvBox").onblur = () => {
+  $("keyHint").hidden = true;
+  for (const keys of held.values()) sendKeys(keys, false);
+  held.clear();
+};
+
+// Stats: what the page measures itself (frames, data, round trip) and what the server reports.
+let statsTimer = null;
+$("statsBtn").onclick = () => {
+  const on = !statsTimer;
+  $("stats").hidden = !on; $("statsBtn").className = on ? "small on" : "small";
+  if (!on) { clearInterval(statsTimer); statsTimer = null; return; }
+  let last = { ...seen, at: performance.now() };
+  const show = async () => {
+    const asked = performance.now();
+    let server = {};
+    try { server = await (await fetch("/api/stats")).json(); } catch (err) {}
+    const now = performance.now(), took = (now - last.at) / 1000;
+    const lines = [
+      "screen     " + ((seen.frames - last.frames) / took).toFixed(1) + " frames/s",
+      "data       " + ((seen.bytes - last.bytes) / took / 1024).toFixed(1) + " KB/s",
+      "round trip " + Math.round(now - asked) + " ms",
+    ];
+    if (server.memory_total_mb) lines.push(
+      "memory     " + server.memory_used_mb + " of " + server.memory_total_mb + " MB",
+      "load       " + server.load.toFixed(2) + " on " + server.cores + " cores");
+    if (server.emulator_mb) lines.push("emulator   " + (server.emulator_cpu ?? "?") + "% cpu, " + server.emulator_mb + " MB");
+    if (server.sessions) lines.push("people     " + server.sessions + " here, " + server.working + " working");
+    $("stats").textContent = lines.join("\n");
+    last = { ...seen, at: now };
+  };
+  show(); statsTimer = setInterval(show, 2000);
+};
+
+function highlight(text, name) {
+  const pre = $("source");
+  pre.replaceChildren();
+  const basic = /\.bas$/i.test(name);
+  for (const line of text.split(/\r?\n/)) {
+    if (basic) {
+      const m = /^(\s*)(\d+)(\s?)(.*)$/.exec(line);
+      if (line.trimStart().startsWith("#")) pre.append(el("span", "rem", line));
+      else if (m) {
+        pre.append(m[1], el("span", "num", m[2]), m[3]);
+        for (const part of m[4].split(/("[^"]*"?)/)) pre.append(part.startsWith('"') ? el("span", "str", part) : part);
+      } else pre.append(line);
+    } else {
+      const i = line.indexOf(";");
+      if (i >= 0) pre.append(line.slice(0, i), el("span", "rem", line.slice(i))); else pre.append(line);
+    }
+    pre.append("\n");
+  }
+}
+
+// Writing a program yourself: the listing becomes an editor; saving stores it and runs it.
+let editing = false, shownText = "";
+function edit(on, text) {
+  editing = on;
+  $("editor").hidden = !on; $("source").hidden = on; $("saveFile").hidden = !on;
+  $("editFile").textContent = on ? "Cancel" : "Edit";
+  if (on) { $("editor").value = text; $("editor").focus(); } else fileStamp = {};
+}
+$("editFile").onclick = () => { if (editing) edit(false); else if (currentFile) edit(true, shownText); };
+$("newFile").onclick = () => { $("newName").hidden = false; $("newName").value = ""; $("newName").focus(); };
+$("newName").onkeydown = ev => {
+  if (ev.key === "Escape") $("newName").hidden = true;
+  if (ev.key !== "Enter") return;
+  const name = $("newName").value.trim();
+  if (!/^[A-Za-z0-9_-]{1,40}\.(bas|asm|inc)$/.test(name)) return notice("Use letters, digits, - or _ and end the name .bas, .asm or .inc");
+  $("newName").hidden = true;
+  currentFile = name; pinned = true;
+  edit(true, name.endsWith(".bas") ? "10 REM " + name.replace(/\.bas$/, "") + "\n20 PRINT \"hello\"\n" : "");
+};
+async function run(name) {
+  const data = await post("/api/run", { name });
+  const report = /^report: (.*)$/m.exec(data.screen || "");
+  $("fileNote").textContent = report && !report[1].startsWith("(") ? report[1] : "running";
+}
+$("saveFile").onclick = async () => {
+  try {
+    await post("/api/file", { name: currentFile, text: $("editor").value });
+    edit(false);
+    if (currentFile.endsWith(".bas")) await run(currentFile);
+  } catch (err) { tell(err); }
+};
+$("runFile").onclick = () => { if (currentFile) run(currentFile).catch(tell); };
+
+async function files() {
+  try {
+    if (editing) throw new Error("leave the editor alone");
+    const list = await (await fetch("/api/files")).json();
+    const sources = list.filter(f => f.source);
+    if (!currentFile && sources.length) currentFile = sources[0].name;
+    const tabs = $("tabs");
+    tabs.replaceChildren();
+    for (const f of sources) {
+      const b = el("button", f.name === currentFile ? "on" : "", f.name);
+      b.onclick = () => { currentFile = f.name; pinned = true; fileStamp = {}; files(); };
+      tabs.append(b);
+    }
+    const now = sources.find(f => f.name === currentFile);
+    const stem = currentFile ? currentFile.replace(/\.[^.]+$/, "") : "";
+    const tape = list.find(f => f.name === stem + ".tap");
+    if (tape) { const a = el("a", "", "download " + tape.name); a.href = "/api/file?name=" + encodeURIComponent(tape.name); tabs.append(a); }
+    if (now && (fileStamp.name !== now.name || fileStamp.modified !== now.modified)) {
+      const text = await (await fetch("/api/file?name=" + encodeURIComponent(now.name))).text();
+      highlight(text, now.name); shownText = text;
+      fileStamp = { name: now.name, modified: now.modified };
+      $("fileNote").textContent = text.split("\n").filter(l => l.trim()).length + " lines";
+    } else if (!now) { $("source").textContent = currentFile ? "" : "No programs yet."; $("fileNote").textContent = ""; }
+  } catch (err) { /* try again next time */ }
+  setTimeout(files, running ? 1000 : 2500);
+}
+
+// Hosted, every request needs a sign-in token. It is kept in a cookie so that images and
+// downloads carry it too; on your own machine /api/config says there is no sign-in.
+const plainFetch = window.fetch.bind(window);
+const here = location.origin + "/";
+let auth = null, renewing = null;
+const b64 = bytes => btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const saved = {
+  get(key) { try { return localStorage.getItem(key); } catch (err) { return null; } },
+  set(key, value) { try { value === null ? localStorage.removeItem(key) : localStorage.setItem(key, value); } catch (err) {} },
+};
+
+async function getToken(params) {
+  const r = await plainFetch(`https://${auth.domain}/oauth2/token`, {
+    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ client_id: auth.client, ...params }),
+  });
+  if (!r.ok) throw new Error("sign-in failed");
+  const tokens = await r.json();
+  document.cookie = `${auth.cookie}=${tokens.id_token}; path=/; Secure; SameSite=Strict; max-age=${tokens.expires_in}`;
+  if (tokens.refresh_token) saved.set("specdev_refresh", tokens.refresh_token);
+}
+
+async function toSignIn() {
+  const verifier = b64(crypto.getRandomValues(new Uint8Array(32)));
+  sessionStorage.setItem("specdev_verifier", verifier);
+  const challenge = b64(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)));
+  location.replace(`https://${auth.domain}/oauth2/authorize?` + new URLSearchParams({
+    response_type: "code", client_id: auth.client, redirect_uri: here, scope: "openid email",
+    code_challenge: challenge, code_challenge_method: "S256",
+  }));
+  await new Promise(() => {});  // the page is being left
+}
+
+async function renew() {
+  const refresh = saved.get("specdev_refresh");
+  if (refresh) {
+    try { return await getToken({ grant_type: "refresh_token", refresh_token: refresh }); }
+    catch (err) { saved.set("specdev_refresh", null); }
+  }
+  await toSignIn();
+}
+
+window.fetch = async (...args) => {
+  let r = await plainFetch(...args);
+  if (r.status === 401 && auth) {
+    renewing = renewing || renew().finally(() => { renewing = null; });
+    await renewing;
+    r = await plainFetch(...args);
+  }
+  return r;
+};
+
+// Hosted, the machine behind the page switches itself off when nobody is using it.
+// /wake says whether it is up and starts it if not; wait here until it answers.
+let waking = null, asleep = false;
+function awake() {
+  waking = waking || (async () => {
+    for (;;) {
+      try {
+        const r = await fetch("/wake");
+        if (r.ok && (await r.json()).state === "running" && (await plainFetch("/api/files")).status < 500) return;
+      } catch (err) { /* try again */ }
+      $("status").className = "status working";
+      $("statusText").textContent = "Starting the workbench, about a minute";
+      await new Promise(done => setTimeout(done, 3000));
+    }
+  })().finally(() => { waking = null; });
+  return waking;
+}
+
+// The dividers: drag to share the room between the panes; the choice is remembered on this device.
+function divider(bar, name, box, across) {
+  const root = document.documentElement.style;
+  const kept = saved.get("specdev_" + name);
+  if (kept) root.setProperty("--" + name, kept);
+  bar.onpointerdown = down => {
+    bar.setPointerCapture(down.pointerId);
+    bar.classList.add("dragging"); document.body.classList.add("resizing");
+    bar.onpointermove = move => {
+      const r = box.getBoundingClientRect();
+      const share = across ? (move.clientX - r.left) / r.width : (move.clientY - r.top) / r.height;
+      const value = (Math.min(0.85, Math.max(0.15, share)) * 100).toFixed(1) + "%";
+      root.setProperty("--" + name, value);
+      saved.set("specdev_" + name, value);
+    };
+    bar.onpointerup = bar.onpointercancel = () => {
+      bar.onpointermove = null;
+      bar.classList.remove("dragging"); document.body.classList.remove("resizing");
+    };
+  };
+  bar.ondblclick = () => { root.removeProperty("--" + name); saved.set("specdev_" + name, null); };
+}
+divider($("splitChat"), "chat", document.querySelector("main"), true);
+divider($("splitTv"), "tv", document.querySelector(".right"), false);
+
+async function start() {
+  try { auth = (await (await plainFetch("/api/config")).json()).auth; } catch (err) { /* poll() reports it */ }
+  const code = new URLSearchParams(location.search).get("code");
+  if (auth && code) {
+    history.replaceState(null, "", "/");
+    try {
+      await getToken({ grant_type: "authorization_code", code, redirect_uri: here,
+                       code_verifier: sessionStorage.getItem("specdev_verifier") || "" });
+    } catch (err) { await toSignIn(); }
+  }
+  if (auth) await awake();
+  showEmpty();
+  poll(); screen(); files();
+}
+start();
+</script>
+</body>
+</html>
